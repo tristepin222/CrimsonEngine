@@ -1082,12 +1082,23 @@ static bool registerBuiltinComponents() {
 }
 
 // Dynamically register all components from ComponentReflectionRegistry into ComponentSerializerRegistry
-static void syncReflectionSerializers() {
+void syncReflectionSerializers() {
+    static bool isSyncing = false;
+    if (isSyncing) return;
+    isSyncing = true;
+
+    static bool initBuiltin = registerBuiltinComponents();
+    (void)initBuiltin;
+
     auto& reg = ComponentSerializerRegistry::getInstance();
     auto& reflReg = Engine::ComponentReflectionRegistry::getInstance();
+    auto currentRegs = reg.getRegistrations();
+
     for (const auto& refl : reflReg.getReflections()) {
+        if (refl.name.empty()) continue;
+
         bool alreadyRegistered = false;
-        for (const auto& regComp : reg.getRegistrations()) {
+        for (const auto& regComp : currentRegs) {
             if (regComp.componentName == refl.name) {
                 alreadyRegistered = true;
                 break;
@@ -1143,25 +1154,26 @@ static void syncReflectionSerializers() {
                 bool hasComp = false;
                 std::string compJson;
 
-                // 1. Check if json is an inner component object passed directly from components map
-                if (json.find("\"" + refl.name + "\":") == std::string::npos &&
-                    json.find("\"" + refl.name + "Component\":") == std::string::npos &&
-                    json.find('{') != std::string::npos) {
+                // 1. Check if json contains refl.name as a sub-object key
+                compJson = JSONUtils::extractSubObject(json, refl.name);
+                if (compJson.empty()) {
+                    compJson = JSONUtils::extractSubObject(json, refl.name + "Component");
+                }
+
+                if (!compJson.empty()) {
                     hasComp = true;
-                    compJson = json;
                 } else {
-                    // 2. Extract sub-object if json contains refl.name wrapper key
-                    compJson = JSONUtils::extractSubObject(json, refl.name);
-                    if (compJson.empty()) {
-                        compJson = JSONUtils::extractSubObject(json, refl.name + "Component");
-                    }
-                    if (!compJson.empty()) {
+                    // 2. Check for flat / legacy entity format: entityType == refl.name or has<ReflName>: true
+                    std::string entityTypeStr = JSONUtils::extractStringValue(json, "entityType");
+                    if (entityTypeStr == refl.name || entityTypeStr == refl.name + "Component" ||
+                        json.find("\"has" + refl.name + "\":") != std::string::npos ||
+                        json.find("\"has" + refl.name + "Component\":") != std::string::npos) {
                         hasComp = true;
-                    } else {
-                        // 3. Fallback for legacy scene format with "has<Comp>": true
-                        hasComp = (json.find("\"has" + refl.name + "\":") != std::string::npos) ||
-                                   (json.find("\"has" + refl.name + "Component\":") != std::string::npos);
-                        if (hasComp) compJson = json;
+                        compJson = json;
+                    } else if (json.find("\"name\":") == std::string::npos && json.find("\"id\":") == std::string::npos && json.find('{') != std::string::npos) {
+                        // 3. Direct inner object passed without wrapper key
+                        hasComp = true;
+                        compJson = json;
                     }
                 }
 
@@ -1234,6 +1246,7 @@ static void syncReflectionSerializers() {
             }
         );
     }
+    isSyncing = false;
 }
 
 /**
@@ -1436,7 +1449,8 @@ bool SceneSerializer::deserialize(const std::string& path, std::vector<Entity>& 
         }
 
         // Invoke all registered component deserializers
-        for (const auto& reg : ComponentSerializerRegistry::getInstance().getRegistrations()) {
+        std::vector<ComponentSerializerRegistry::Registration> registrations = ComponentSerializerRegistry::getInstance().getRegistrations();
+        for (const auto& reg : registrations) {
             std::string targetJson;
             if (!componentsJson.empty()) {
                 // Structured scene format: component dictionary inside componentsJson
@@ -1451,7 +1465,7 @@ bool SceneSerializer::deserialize(const std::string& path, std::vector<Entity>& 
                     targetJson = JSONUtils::extractSubObject(entityJson, reg.componentName + "Component");
                 }
             }
-            if (targetJson.empty() && componentsJson.empty()) {
+            if (targetJson.empty()) {
                 targetJson = entityJson;
             }
 

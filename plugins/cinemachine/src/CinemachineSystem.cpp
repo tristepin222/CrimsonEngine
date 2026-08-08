@@ -162,9 +162,6 @@ void CinemachineSystem::update(float dt) {
     if (!activeVcam->initialized) {
         if (activeVcam->cameraYaw == 0.0f && activeVcam->orbitYaw != 0.0f) {
             activeVcam->cameraYaw = activeVcam->orbitYaw;
-        } else if (activeVcam->cameraYaw == 0.0f && activeVcamTransform->rotation.y != 0.0f) {
-            activeVcam->cameraYaw = activeVcamTransform->rotation.y;
-            activeVcam->orbitYaw = activeVcamTransform->rotation.y;
         } else if (activeVcam->cameraYaw == 0.0f && activeVcam->mode == CinemachineMode::Follow2D) {
             activeVcam->cameraYaw = -90.0f;
             activeVcam->orbitYaw = -90.0f;
@@ -180,26 +177,11 @@ void CinemachineSystem::update(float dt) {
         activeVcam->currentPosition = targetPos;
         activeVcam->currentRotationEuler = glm::vec3(activeVcam->cameraPitch, activeVcam->cameraYaw, activeVcamTransform->rotation.z);
         activeVcam->initialized = true;
-    }
-
-    // Bidirectional sync between Transform.rotation and cameraYaw/cameraPitch for Inspector editing
-    if (activeVcamTransform->rotation.y != activeVcam->lastTransformYaw) {
-        activeVcam->cameraYaw = activeVcamTransform->rotation.y;
-        activeVcam->orbitYaw = activeVcamTransform->rotation.y;
     } else {
-        activeVcamTransform->rotation.y = activeVcam->cameraYaw;
+        // Sync orbit angles to camera yaw/pitch if cameraYaw/cameraPitch were edited in Inspector
         activeVcam->orbitYaw = activeVcam->cameraYaw;
-    }
-    activeVcam->lastTransformYaw = activeVcamTransform->rotation.y;
-
-    if (activeVcamTransform->rotation.x != activeVcam->lastTransformPitch) {
-        activeVcam->cameraPitch = activeVcamTransform->rotation.x;
-        activeVcam->orbitPitch = activeVcamTransform->rotation.x;
-    } else {
-        activeVcamTransform->rotation.x = activeVcam->cameraPitch;
         activeVcam->orbitPitch = activeVcam->cameraPitch;
     }
-    activeVcam->lastTransformPitch = activeVcamTransform->rotation.x;
 
     if (activeVcam->mode == CinemachineMode::ThirdPersonFollow) {
         // Follow Target
@@ -385,6 +367,8 @@ void CinemachineSystem::update(float dt) {
     // Write back resolved values to the virtual camera's transform component so it can be inspected
     activeVcamTransform->position = activeVcam->currentPosition;
     activeVcamTransform->rotation = activeVcam->currentRotationEuler;
+    activeVcam->lastTransformYaw = activeVcamTransform->rotation.y;
+    activeVcam->lastTransformPitch = activeVcamTransform->rotation.x;
 
     // 3. Handle Cinemachine Brain Blending transitions
     if (activeVcamEntity != lastActiveCameraEntity) {

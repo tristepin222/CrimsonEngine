@@ -47,25 +47,19 @@ public:
      * @param serialize Serialization callback.
      * @param deserialize Deserialization callback.
      */
-    void registerComponent(const std::string& componentName, SerializerCallback serialize, DeserializerCallback deserialize) {
-        for (auto& existing : registrations) {
-            if (existing.componentName == componentName) {
-                existing.serialize = serialize;
-                existing.deserialize = deserialize;
-                return;
-            }
-        }
-        registrations.push_back({ componentName, serialize, deserialize });
-    }
+    /**
+     * @brief Registers serializer callbacks for a component type.
+     * @param serialize Serialization callback.
+     * @param deserialize Deserialization callback.
+     */
+    void registerComponent(const std::string& componentName, SerializerCallback serialize, DeserializerCallback deserialize);
 
 
     /**
      * @brief Retrieves all registered components.
      * @return List of registrations.
      */
-    const std::vector<Registration>& getRegistrations() const {
-        return registrations;
-    }
+    const std::vector<Registration>& getRegistrations() const;
 
 private:
     /** @brief Default constructor for singleton. */
