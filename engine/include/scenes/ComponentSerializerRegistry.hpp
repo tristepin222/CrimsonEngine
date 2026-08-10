@@ -49,6 +49,7 @@ public:
      */
     /**
      * @brief Registers serializer callbacks for a component type.
+     * @param componentName Name of component.
      * @param serialize Serialization callback.
      * @param deserialize Deserialization callback.
      */
