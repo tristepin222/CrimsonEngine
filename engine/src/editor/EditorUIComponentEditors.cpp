@@ -21,6 +21,7 @@
 #include "ecs/components/Tilemap.hpp"
 #include "ecs/components/UIComponents.hpp"
 #include "ecs/components/SpriteRenderer.hpp"
+#include "ui/UIBuilder.hpp"
 #include "renderer/VulkanRenderer.hpp"
 #include "renderer/ResourceManager.hpp"
 #include "scenes/Scene.hpp"
@@ -2048,6 +2049,26 @@ void EditorUI::drawUIComponentsEditor() {
         bool visible = true;
         if (CollapsingHeader("UI Canvas", &visible, ImGuiTreeNodeFlags_DefaultOpen)) {
             Checkbox("Screen Space Overlay##canvas_ss", &canvas->isScreenSpace);
+
+            Spacing();
+            static std::string s_exportedCode;
+            if (Button("Export UI to C++ Code")) {
+                s_exportedCode = Engine::UIBuilder::ExportHierarchyToCode(registry, selectedEntity);
+                OpenPopup("##ExportUICodePopup");
+            }
+
+            if (BeginPopup("##ExportUICodePopup")) {
+                Text("Generated C++ UI Code:");
+                Separator();
+                InputTextMultiline("##uicodesnip", const_cast<char*>(s_exportedCode.c_str()), s_exportedCode.size() + 1, ImVec2(500, 300), ImGuiInputTextFlags_ReadOnly);
+                if (Button("Copy to Clipboard")) {
+                    SetClipboardText(s_exportedCode.c_str());
+                    CloseCurrentPopup();
+                }
+                SameLine();
+                if (Button("Close")) CloseCurrentPopup();
+                EndPopup();
+            }
         }
         PopStyleColor(3);
         if (!visible) {

@@ -81,6 +81,7 @@ set(ENGINE_SOURCES
     src/ecs/systems/TilemapSystem.cpp
     src/ecs/systems/UISystem.cpp
     src/ecs/systems/SpriteSystem.cpp
+    src/ui/UIBuilder.cpp
 )
 
 add_library(engine SHARED ${ENGINE_SOURCES})
