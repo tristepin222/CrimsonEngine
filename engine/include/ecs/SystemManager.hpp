@@ -21,6 +21,21 @@ public:
     }
 
     /**
+     * @brief Removes a system from the manager (e.g. on script plugin unload).
+     * @param system Shared pointer to the system to remove.
+     */
+    void removeSystem(std::shared_ptr<System> system) {
+        if (!system) return;
+        for (auto it = systems.begin(); it != systems.end(); ) {
+            if (*it == system) {
+                it = systems.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+
+    /**
      * @brief Triggers the update routine on all registered systems.
      * @param dt Delta time in seconds.
      */

@@ -69,6 +69,53 @@ static void drawRegisteredAssetBrowserMenu(const std::filesystem::path& folderPa
     }
 }
 
+static std::string acceptDroppedAssetPath() {
+    if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DND_PAYLOAD_ASSET_PATH")) {
+        return std::string((const char*)payload->Data);
+    }
+    if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DND_PAYLOAD_MULTI_ASSETS")) {
+        std::string s((const char*)payload->Data);
+        size_t pipe = s.find('|');
+        if (pipe != std::string::npos) s = s.substr(0, pipe);
+        return s;
+    }
+    return "";
+}
+
+static void ensureClipLoaded(AnimatorComponent* animator, Registry& registry, Entity selectedEntity, const std::string& cName, VulkanRenderer& renderer) {
+    if (!animator || cName.empty()) return;
+    for (const auto& cl : animator->animations) {
+        if (cl.name == cName || std::filesystem::path(cl.name).stem().string() == cName) return;
+    }
+    std::vector<std::string> candidates = {
+        cName, cName + ".anim",
+        "assets/" + cName, "assets/" + cName + ".anim",
+        "assets/animations/" + cName, "assets/animations/" + cName + ".anim"
+    };
+    SkeletonComponent* skeleton = registry.get<SkeletonComponent>(selectedEntity);
+    SkeletonComponent dummySkel;
+    for (const auto& cand : candidates) {
+        if (std::filesystem::exists(cand)) {
+            renderer.resourceManager->loadBinarySkeletonAndAnimations(cand, skeleton ? *skeleton : dummySkel, *animator, true);
+            return;
+        }
+    }
+}
+
+static bool s_openSSConverterWindow = false;
+static std::filesystem::path s_ssConverterAssetPath;
+static int s_ssCellWidth = 64;
+static int s_ssCellHeight = 64;
+static float s_ssFrameRate = 12.0f;
+static std::string s_ssOutputPrefix = "";
+static std::set<std::filesystem::path> s_selectedAssetPaths;
+static bool s_ssCombineSingleFile = false;
+static std::vector<EditorUI::SpritesheetAnimConfig> s_ssAnimConfigs = {
+    { "Idle", 3, 0 },
+    { "Walk", 5, 3 },
+    { "Run", 8, 8 }
+};
+
 void EditorUI::drawPanels() {
     if (!initialized) {
         return;
@@ -221,6 +268,9 @@ void EditorUI::drawPanels() {
 
     // 7f. Floating Sprite Sheet Slicer window
     drawSpriteSlicerWindow();
+
+    // 7g. Floating Spritesheet to Animations converter window
+    drawSpritesheetConverterWindow();
 
     // 8. Build Settings panel (floating modal)
     if (showBuildSettings) {
@@ -901,7 +951,6 @@ void EditorUI::drawAssetBrowser() {
     static bool s_openCreateScenePopup = false;
     static bool s_openCreateFilePopup = false;
     static bool s_openRenamePopup = false;
-    static std::set<std::filesystem::path> s_selectedAssetPaths;
     static std::filesystem::path s_lastSelectedAssetPath;
 
     std::vector<std::filesystem::path> visiblePaths;
@@ -979,12 +1028,11 @@ void EditorUI::drawAssetBrowser() {
                         multiPaths = entry.path().generic_string();
                     }
 
-                    SetDragDropPayload("DND_PAYLOAD_ASSET_PATH", pathStr.c_str(), pathStr.size() + 1);
-                    SetDragDropPayload("DND_PAYLOAD_MULTI_ASSETS", multiPaths.c_str(), multiPaths.size() + 1);
-                    
                     if (s_selectedAssetPaths.size() > 1 && s_selectedAssetPaths.find(entry.path()) != s_selectedAssetPaths.end()) {
+                        SetDragDropPayload("DND_PAYLOAD_MULTI_ASSETS", multiPaths.c_str(), multiPaths.size() + 1);
                         Text("Dragging %d assets", (int)s_selectedAssetPaths.size());
                     } else {
+                        SetDragDropPayload("DND_PAYLOAD_ASSET_PATH", pathStr.c_str(), pathStr.size() + 1);
                         Text("Dragging folder %s", name.c_str());
                     }
                     EndDragDropSource();
@@ -1174,7 +1222,8 @@ void EditorUI::drawAssetBrowser() {
                     }
                     Separator();
                     if (isModel || isTexture) {
-                        if (MenuItem("Import Settings...")) {
+                        std::string importLabel = (s_selectedAssetPaths.size() > 1) ? "Batch Import Settings..." : "Import Settings...";
+                        if (MenuItem(importLabel.c_str())) {
                             s_importSettingsAssetPath = entry.path();
                             s_triggerLoadImportSettings = true;
                         }
@@ -1184,6 +1233,14 @@ void EditorUI::drawAssetBrowser() {
                             s_sliceCellWidth = 64;
                             s_sliceCellHeight = 64;
                             s_sliceOutputPrefix = s_spriteSlicerAssetPath.stem().string();
+                        }
+                        if (isTexture && MenuItem("Convert Spritesheet to Animations...")) {
+                            s_ssConverterAssetPath = entry.path();
+                            s_openSSConverterWindow = true;
+                            s_ssCellWidth = 64;
+                            s_ssCellHeight = 64;
+                            s_ssFrameRate = 12.0f;
+                            s_ssOutputPrefix = s_ssConverterAssetPath.stem().string();
                         }
                         Separator();
                     }
@@ -1316,12 +1373,11 @@ void EditorUI::drawAssetBrowser() {
                         multiPaths = entry.path().generic_string();
                     }
 
-                    SetDragDropPayload("DND_PAYLOAD_ASSET_PATH", pathStr.c_str(), pathStr.size() + 1);
-                    SetDragDropPayload("DND_PAYLOAD_MULTI_ASSETS", multiPaths.c_str(), multiPaths.size() + 1);
-                    
                     if (s_selectedAssetPaths.size() > 1 && s_selectedAssetPaths.find(entry.path()) != s_selectedAssetPaths.end()) {
+                        SetDragDropPayload("DND_PAYLOAD_MULTI_ASSETS", multiPaths.c_str(), multiPaths.size() + 1);
                         Text("Dragging %d assets", (int)s_selectedAssetPaths.size());
                     } else {
+                        SetDragDropPayload("DND_PAYLOAD_ASSET_PATH", pathStr.c_str(), pathStr.size() + 1);
                         Text("Dragging %s", name.c_str());
                     }
                     EndDragDropSource();
@@ -1549,6 +1605,68 @@ void EditorUI::drawImportSettingsWindow() {
     }
 
     if (!s_openImportSettingsWindow) return;
+
+    // Check if multiple assets are selected in Asset Browser
+    std::vector<std::filesystem::path> selectedTextures;
+    if (s_selectedAssetPaths.size() > 1) {
+        for (const auto& p : s_selectedAssetPaths) {
+            std::string pExt = p.extension().string();
+            std::string lowerPExt = pExt;
+            for (char& c : lowerPExt) c = (char)std::tolower((unsigned char)c);
+            if (lowerPExt == ".png" || lowerPExt == ".jpg" || lowerPExt == ".jpeg" || lowerPExt == ".tga") {
+                selectedTextures.push_back(p);
+            }
+        }
+    }
+
+    if (!selectedTextures.empty()) {
+        Begin("Batch Texture Import Settings", &s_openImportSettingsWindow, ImGuiWindowFlags_AlwaysAutoResize);
+        Text("Batch Selected Textures: %d files", static_cast<int>(selectedTextures.size()));
+        Separator();
+        drawSectionHeader("Batch Texture Filter Mode");
+
+        static int batchFilterIdx = 0; // 0: Nearest (Point), 1: Bilinear, 2: Trilinear
+        const char* filterModes[] = { "Nearest (Point)", "Bilinear", "Trilinear" };
+        Combo("Filter Mode", &batchFilterIdx, filterModes, IM_ARRAYSIZE(filterModes));
+
+        Spacing();
+        Separator();
+        std::string applyLabel = "Apply to All " + std::to_string(selectedTextures.size()) + " Selected Textures";
+        if (Button(applyLabel.c_str())) {
+            TextureFilterMode targetFilter = TextureFilterMode::Bilinear;
+            if (batchFilterIdx == 0) targetFilter = TextureFilterMode::Nearest;
+            else if (batchFilterIdx == 2) targetFilter = TextureFilterMode::Trilinear;
+
+            std::string filterStr = "Bilinear";
+            if (targetFilter == TextureFilterMode::Nearest) filterStr = "Nearest";
+            else if (targetFilter == TextureFilterMode::Trilinear) filterStr = "Trilinear";
+
+            int updatedCount = 0;
+            for (const auto& texPath : selectedTextures) {
+                std::string relativePath = texPath.generic_string() + ".meta";
+                if (!texPath.parent_path().empty()) {
+                    std::filesystem::create_directories(texPath.parent_path());
+                }
+                std::ofstream f(relativePath);
+                if (f.is_open()) {
+                    f << "{\n"
+                      << "  \"filterMode\": \"" << filterStr << "\"\n"
+                      << "}\n";
+                    f.close();
+                }
+                renderer.resourceManager->updateTextureFilterMode(texPath.generic_string(), renderer, targetFilter);
+                updatedCount++;
+            }
+            statusMessage = "Batch updated import settings for " + std::to_string(updatedCount) + " textures to " + filterStr + "!";
+            s_openImportSettingsWindow = false;
+        }
+        SameLine();
+        if (Button("Cancel")) {
+            s_openImportSettingsWindow = false;
+        }
+        End();
+        return;
+    }
 
     Begin("Import Settings", &s_openImportSettingsWindow, ImGuiWindowFlags_AlwaysAutoResize);
 
@@ -1840,7 +1958,8 @@ void EditorUI::drawSpriteSlicerWindow() {
     ImGui::End();
 }
 
-void EditorUI::sliceSpriteSheet(const std::filesystem::path& path, int cellWidth, int cellHeight, const std::string& prefix, bool skipEmptyTiles) {
+std::vector<std::filesystem::path> EditorUI::sliceSpriteSheet(const std::filesystem::path& path, int cellWidth, int cellHeight, const std::string& prefix, bool skipEmptyTiles) {
+    std::vector<std::filesystem::path> outputPaths;
     stbi_set_flip_vertically_on_load(false);
     
     int texWidth = 0, texHeight = 0, texChannels = 0;
@@ -1848,13 +1967,13 @@ void EditorUI::sliceSpriteSheet(const std::filesystem::path& path, int cellWidth
     
     if (!pixels) {
         statusMessage = "Error: Failed to load source texture: " + path.string();
-        return;
+        return outputPaths;
     }
     
     if (cellWidth <= 0 || cellHeight <= 0 || cellWidth > texWidth || cellHeight > texHeight) {
         statusMessage = "Error: Invalid cell dimensions.";
         stbi_image_free(pixels);
-        return;
+        return outputPaths;
     }
     
     int cols = texWidth / cellWidth;
@@ -1863,7 +1982,7 @@ void EditorUI::sliceSpriteSheet(const std::filesystem::path& path, int cellWidth
     if (cols <= 0 || rows <= 0) {
         statusMessage = "Error: Cell dimensions too large.";
         stbi_image_free(pixels);
-        return;
+        return outputPaths;
     }
     
     std::filesystem::path parentDir = path.parent_path();
@@ -1900,6 +2019,7 @@ void EditorUI::sliceSpriteSheet(const std::filesystem::path& path, int cellWidth
             std::filesystem::path outputPath = parentDir / outputName;
             
             if (stbi_write_png(outputPath.string().c_str(), cellWidth, cellHeight, 4, cellBuffer.data(), cellWidth * 4)) {
+                outputPaths.push_back(outputPath);
                 count++;
             } else {
                 std::cerr << "[SpriteSlicer] Failed to write file: " << outputPath << std::endl;
@@ -1910,6 +2030,230 @@ void EditorUI::sliceSpriteSheet(const std::filesystem::path& path, int cellWidth
     stbi_image_free(pixels);
     
     statusMessage = "Successfully sliced " + std::to_string(count) + " sprites to " + parentDir.generic_string();
+    return outputPaths;
+}
+
+void EditorUI::drawSpritesheetConverterWindow() {
+    if (!s_openSSConverterWindow) return;
+
+    ImGui::SetNextWindowSize(ImVec2(550, 520), ImGuiCond_FirstUseEver);
+    if (!ImGui::Begin("Convert Spritesheet to Animations", &s_openSSConverterWindow)) {
+        ImGui::End();
+        return;
+    }
+
+    std::string pathStr = s_ssConverterAssetPath.empty() ? "None (Drag & Drop texture asset here)" : s_ssConverterAssetPath.generic_string();
+
+    ImGui::Text("Source Texture:");
+    ImGui::Button(pathStr.c_str(), ImVec2(-1, 35));
+    if (ImGui::BeginDragDropTarget()) {
+        if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DND_PAYLOAD_ASSET_PATH")) {
+            std::filesystem::path droppedPath = (const char*)payload->Data;
+            std::string ext = droppedPath.extension().string();
+            if (ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".tga") {
+                s_ssConverterAssetPath = droppedPath;
+                s_ssOutputPrefix = s_ssConverterAssetPath.stem().string();
+            }
+        }
+        ImGui::EndDragDropTarget();
+    }
+
+    if (!s_ssConverterAssetPath.empty()) {
+        int texWidth = 0, texHeight = 0, texChannels = 0;
+        if (stbi_info(s_ssConverterAssetPath.string().c_str(), &texWidth, &texHeight, &texChannels)) {
+            ImGui::Text("Dimensions: %d x %d px (%d channels)", texWidth, texHeight, texChannels);
+            ImGui::Separator();
+
+            ImGui::TextColored(ImVec4(0.3f, 0.8f, 1.0f, 1.0f), "1. Sprite Sheet Slicer Settings");
+            ImGui::InputInt("Cell Width (px)", &s_ssCellWidth);
+            ImGui::InputInt("Cell Height (px)", &s_ssCellHeight);
+            ImGui::InputFloat("Playback Frame Rate (FPS)", &s_ssFrameRate, 1.0f, 5.0f, "%.1f");
+
+            if (s_ssCellWidth <= 0) s_ssCellWidth = 16;
+            if (s_ssCellHeight <= 0) s_ssCellHeight = 16;
+            if (s_ssFrameRate <= 0.1f) s_ssFrameRate = 12.0f;
+
+            int cols = texWidth / s_ssCellWidth;
+            int rows = texHeight / s_ssCellHeight;
+            int totalFramesAvailable = cols * rows;
+
+            ImGui::Text("Grid: %d Cols x %d Rows -> %d Total Sliced Sprite Frames Available", cols, rows, totalFramesAvailable);
+
+            char prefixBuf[256];
+            strncpy_s(prefixBuf, s_ssOutputPrefix.c_str(), sizeof(prefixBuf) - 1);
+            if (ImGui::InputText("Sprite Frame Output Prefix", prefixBuf, sizeof(prefixBuf))) {
+                s_ssOutputPrefix = prefixBuf;
+            }
+
+            ImGui::Separator();
+            ImGui::TextColored(ImVec4(0.3f, 0.8f, 1.0f, 1.0f), "2. Animation Clips Configuration");
+
+            int numAnims = static_cast<int>(s_ssAnimConfigs.size());
+            if (ImGui::InputInt("Number of Animations", &numAnims)) {
+                if (numAnims < 1) numAnims = 1;
+                s_ssAnimConfigs.resize(numAnims);
+            }
+
+            // Automatically compute start frame indices continuously
+            int currentFrameAccum = 0;
+            for (size_t i = 0; i < s_ssAnimConfigs.size(); ++i) {
+                if (s_ssAnimConfigs[i].name.empty()) {
+                    s_ssAnimConfigs[i].name = "Anim_" + std::to_string(i);
+                }
+                s_ssAnimConfigs[i].startFrameIndex = currentFrameAccum;
+                currentFrameAccum += std::max(1, s_ssAnimConfigs[i].frameCount);
+            }
+
+            ImGui::BeginChild("AnimConfigsList", ImVec2(0, 180), true);
+            for (size_t i = 0; i < s_ssAnimConfigs.size(); ++i) {
+                ImGui::PushID(static_cast<int>(i));
+                char nameBuf[128];
+                strncpy_s(nameBuf, s_ssAnimConfigs[i].name.c_str(), sizeof(nameBuf) - 1);
+
+                ImGui::Text("Anim %d:", static_cast<int>(i + 1));
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(130.0f);
+                if (ImGui::InputText("##AnimName", nameBuf, sizeof(nameBuf))) {
+                    s_ssAnimConfigs[i].name = nameBuf;
+                }
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(90.0f);
+                ImGui::InputInt("Frames##FrameCnt", &s_ssAnimConfigs[i].frameCount);
+                if (s_ssAnimConfigs[i].frameCount < 1) s_ssAnimConfigs[i].frameCount = 1;
+
+                ImGui::SameLine();
+                int startIdx = s_ssAnimConfigs[i].startFrameIndex;
+                int endIdx = startIdx + s_ssAnimConfigs[i].frameCount - 1;
+                float duration = s_ssAnimConfigs[i].frameCount * (1.0f / s_ssFrameRate);
+                ImGui::Text(" (Frames %d..%d, %.2fs)", startIdx, endIdx, duration);
+
+                ImGui::PopID();
+            }
+            ImGui::EndChild();
+
+            ImGui::Checkbox("Combine Clips into Single .anim File", &s_ssCombineSingleFile);
+
+            ImGui::Spacing();
+            if (ImGui::Button("Slice Spritesheet and Generate .anim File(s)", ImVec2(-1, 35))) {
+                convertSpritesheetToAnimations(
+                    s_ssConverterAssetPath,
+                    s_ssCellWidth,
+                    s_ssCellHeight,
+                    s_ssFrameRate,
+                    s_ssAnimConfigs,
+                    s_ssCombineSingleFile
+                );
+            }
+        } else {
+            ImGui::TextColored(ImVec4(1, 0, 0, 1), "Failed to read source texture header.");
+        }
+    } else {
+        ImGui::Text("Drag and drop a texture asset from the Asset Browser here.");
+    }
+
+    ImGui::End();
+}
+
+void EditorUI::convertSpritesheetToAnimations(
+    const std::filesystem::path& spritesheetPath,
+    int cellWidth,
+    int cellHeight,
+    float frameRate,
+    const std::vector<SpritesheetAnimConfig>& animConfigs,
+    bool combineIntoSingleFile
+) {
+    if (spritesheetPath.empty() || animConfigs.empty() || frameRate <= 0.0f) {
+        statusMessage = "Error: Invalid parameters for spritesheet animation conversion.";
+        return;
+    }
+
+    // Step 1: Utilize Sprite Sheet Slicer logic to slice the texture into individual PNG frames
+    std::string prefix = s_ssOutputPrefix.empty() ? spritesheetPath.stem().string() : s_ssOutputPrefix;
+    std::vector<std::filesystem::path> framePaths = sliceSpriteSheet(spritesheetPath, cellWidth, cellHeight, prefix, false);
+
+    if (framePaths.empty()) {
+        statusMessage = "Error: Sprite Sheet Slicer generated no frame textures.";
+        return;
+    }
+
+    float frameDuration = 1.0f / frameRate;
+    std::filesystem::path parentDir = spritesheetPath.parent_path();
+    SkeletonComponent emptySkeleton{};
+
+    if (combineIntoSingleFile) {
+        // Create 1 combined AnimatorComponent with all AnimationClips
+        AnimatorComponent animator{};
+        for (const auto& config : animConfigs) {
+            if (config.frameCount <= 0) continue;
+            AnimationClip clip{};
+            clip.name = config.name;
+            clip.duration = config.frameCount * frameDuration;
+
+            PropertyChannel channel{};
+            channel.componentName = "SpriteRenderer";
+            channel.fieldName = "texturePath";
+            channel.type = Engine::FieldType::String;
+
+            for (int f = 0; f < config.frameCount; ++f) {
+                int frameIdx = config.startFrameIndex + f;
+                if (frameIdx >= 0 && frameIdx < static_cast<int>(framePaths.size())) {
+                    PropertyKeyframe key{};
+                    key.time = f * frameDuration;
+                    key.stringValue = framePaths[frameIdx].generic_string();
+                    channel.keys.push_back(key);
+                }
+            }
+
+            clip.propertyChannels.push_back(channel);
+            animator.animations.push_back(clip);
+        }
+
+        if (!animator.animations.empty()) {
+            std::string outFileName = prefix + ".anim";
+            std::filesystem::path outFilePath = parentDir / outFileName;
+            if (renderer.resourceManager->saveBinarySkeletonAndAnimations(outFilePath.generic_string(), emptySkeleton, animator)) {
+                statusMessage = "Successfully generated combined animation file: " + outFileName + " (" + std::to_string(animator.animations.size()) + " clips)";
+            } else {
+                statusMessage = "Failed to save animation file: " + outFilePath.generic_string();
+            }
+        }
+    } else {
+        // Create separate .anim files for each animation configuration
+        int generatedCount = 0;
+        for (const auto& config : animConfigs) {
+            if (config.frameCount <= 0) continue;
+            AnimatorComponent animator{};
+            AnimationClip clip{};
+            clip.name = config.name;
+            clip.duration = config.frameCount * frameDuration;
+
+            PropertyChannel channel{};
+            channel.componentName = "SpriteRenderer";
+            channel.fieldName = "texturePath";
+            channel.type = Engine::FieldType::String;
+
+            for (int f = 0; f < config.frameCount; ++f) {
+                int frameIdx = config.startFrameIndex + f;
+                if (frameIdx >= 0 && frameIdx < static_cast<int>(framePaths.size())) {
+                    PropertyKeyframe key{};
+                    key.time = f * frameDuration;
+                    key.stringValue = framePaths[frameIdx].generic_string();
+                    channel.keys.push_back(key);
+                }
+            }
+
+            clip.propertyChannels.push_back(channel);
+            animator.animations.push_back(clip);
+
+            std::string outFileName = prefix + "_" + config.name + ".anim";
+            std::filesystem::path outFilePath = parentDir / outFileName;
+            if (renderer.resourceManager->saveBinarySkeletonAndAnimations(outFilePath.generic_string(), emptySkeleton, animator)) {
+                generatedCount++;
+            }
+        }
+
+        statusMessage = "Successfully generated " + std::to_string(generatedCount) + " .anim animation file(s) in " + parentDir.generic_string();
+    }
 }
 
 void EditorUI::drawBuildSettingsPanel() {
@@ -3608,27 +3952,82 @@ void EditorUI::drawAnimatorControllerWindow() {
     static std::string       s_lastCurrentState = "";
     static std::unordered_map<std::string, ImVec2> s_statePositions;
 
-    // Collect clip names for combos
+    for (const auto& st : controller->states) {
+        if (st.isBlendTree) {
+            for (const auto& bn : st.blendTree.nodes) ensureClipLoaded(animator, registry, selectedEntity, bn.clipName, renderer);
+        } else {
+            ensureClipLoaded(animator, registry, selectedEntity, st.clipName, renderer);
+        }
+    }
+
+    // Collect all clip names (loaded + scanned from disk assets)
     std::vector<std::string> clipNames;
-    for (const auto& clip : animator->animations)
-        clipNames.push_back(clip.name);
+    std::set<std::string> seenClips;
+    for (const auto& clip : animator->animations) {
+        if (!clip.name.empty() && seenClips.find(clip.name) == seenClips.end()) {
+            seenClips.insert(clip.name);
+            clipNames.push_back(clip.name);
+        }
+        std::string stem = std::filesystem::path(clip.name).stem().string();
+        if (!stem.empty() && seenClips.find(stem) == seenClips.end()) {
+            seenClips.insert(stem);
+            clipNames.push_back(stem);
+        }
+    }
+    try {
+        if (std::filesystem::exists("assets")) {
+            for (const auto& entry : std::filesystem::recursive_directory_iterator("assets")) {
+                if (entry.is_regular_file()) {
+                    std::string ext = entry.path().extension().string();
+                    for (char& c : ext) c = (char)std::tolower((unsigned char)c);
+                    if (ext == ".anim") {
+                        std::string relPath = entry.path().generic_string();
+                        std::string stem = entry.path().stem().string();
+                        if (seenClips.find(stem) == seenClips.end()) {
+                            seenClips.insert(stem);
+                            clipNames.push_back(stem);
+                        }
+                        if (seenClips.find(relPath) == seenClips.end()) {
+                            seenClips.insert(relPath);
+                            clipNames.push_back(relPath);
+                        }
+                    }
+                }
+            }
+        }
+    } catch (...) {}
 
-    // Helper: processes dropped animation files (.anim, .fbx, .gltf, etc.),
-    // loads clips into animator, and returns the resolved clip name.
     auto processDroppedAnimationAsset = [this, animator](const std::string& pathStr) -> std::string {
-
         std::filesystem::path p(pathStr);
         std::string ext = p.extension().string();
-        if (ext == ".anim" || ext == ".fbx" || ext == ".FBX" || ext == ".gltf" || ext == ".glb") {
+        std::string lowerExt = ext;
+        std::transform(lowerExt.begin(), lowerExt.end(), lowerExt.begin(), ::tolower);
+        if (lowerExt == ".anim" || lowerExt == ".fbx" || lowerExt == ".gltf" || lowerExt == ".glb") {
             SkeletonComponent* skeleton = registry.get<SkeletonComponent>(selectedEntity);
-            if (!skeleton) {
+            bool isAnimFile = (lowerExt == ".anim");
+            if (!skeleton && !isAnimFile) {
                 registry.emplace<SkeletonComponent>(selectedEntity, SkeletonComponent{});
                 skeleton = registry.get<SkeletonComponent>(selectedEntity);
             }
             size_t prevCount = animator->animations.size();
-            renderer.resourceManager->loadSkeletonAndAnimations(pathStr, *skeleton, *animator, true);
-            if (animator->animations.size() > prevCount) {
-                return animator->animations.back().name;
+            bool loaded = false;
+            if (isAnimFile) {
+                SkeletonComponent dummySkel;
+                loaded = renderer.resourceManager->loadBinarySkeletonAndAnimations(pathStr, skeleton ? *skeleton : dummySkel, *animator, true);
+            } else {
+                loaded = renderer.resourceManager->loadSkeletonAndAnimations(pathStr, *skeleton, *animator, true);
+            }
+            if (loaded) {
+                if (animator->animations.size() > prevCount) {
+                    return animator->animations.back().name;
+                }
+                std::string stem = p.stem().string();
+                for (const auto& clip : animator->animations) {
+                    if (clip.name == stem) return clip.name;
+                }
+                if (!animator->animations.empty()) {
+                    return animator->animations.front().name;
+                }
             }
             return p.stem().string();
         }
@@ -3640,8 +4039,10 @@ void EditorUI::drawAnimatorControllerWindow() {
     // -----------------------------------------------------------------------
     auto rebuildGraph = [&]() {
         std::string selectedStateName;
+        std::string selectedTypeName;
         if (uint32_t selId = s_ctrlGraph.getSelectedNodeId()) {
             if (Engine::Node* selNode = s_ctrlGraph.findNode(selId)) {
+                selectedTypeName = selNode->typeName;
                 if (selNode->userData) {
                     selectedStateName = static_cast<AnimationState*>(selNode->userData)->name;
                 }
@@ -3685,7 +4086,7 @@ void EditorUI::drawAnimatorControllerWindow() {
                 s_ctrlGraph.addOutputPin(nodeId, "Out", pinState);
             },
             nullptr,
-            [controller, clipNames, processDroppedAnimationAsset, this](Engine::Node& n) {
+            [controller, animator, clipNames, processDroppedAnimationAsset, this](Engine::Node& n) {
 
                 if (!n.userData) { ImGui::TextDisabled("Invalid state reference."); return; }
                 AnimationState* state = static_cast<AnimationState*>(n.userData);
@@ -3719,8 +4120,8 @@ void EditorUI::drawAnimatorControllerWindow() {
                         ImGui::EndCombo();
                     }
                     if (ImGui::BeginDragDropTarget()) {
-                        if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DND_PAYLOAD_ASSET_PATH")) {
-                            const char* droppedPath = (const char*)payload->Data;
+                        std::string droppedPath = acceptDroppedAssetPath();
+                        if (!droppedPath.empty()) {
                             std::string resName = processDroppedAnimationAsset(droppedPath);
                             if (!resName.empty()) {
                                 state->clipName = resName;
@@ -3738,22 +4139,50 @@ void EditorUI::drawAnimatorControllerWindow() {
                     ImGui::TextDisabled("Blend Tree");
                     ImGui::Separator();
 
-                    ImGui::TextDisabled("Parameter:");
-                    char paramBuf[64];
-                    strncpy_s(paramBuf, state->blendTree.parameterName.c_str(), sizeof(paramBuf) - 1);
-                    ImGui::PushItemWidth(-1);
-                    if (ImGui::InputText("##btParam", paramBuf, sizeof(paramBuf)))
-                        state->blendTree.parameterName = paramBuf;
-                    ImGui::PopItemWidth();
+                    std::vector<std::string> pList;
+                    for (const auto& [pn, pv] : controller->parameters) pList.push_back(pn);
+
+                    ImGui::TextDisabled("Parameter X:");
+                    if (!pList.empty()) {
+                        ImGui::PushItemWidth(-1);
+                        if (ImGui::BeginCombo("##btParamCombo", state->blendTree.parameterName.empty() ? "(select param)" : state->blendTree.parameterName.c_str())) {
+                            for (const auto& pn : pList) {
+                                bool sSelected = (pn == state->blendTree.parameterName);
+                                if (ImGui::Selectable(pn.c_str(), sSelected)) state->blendTree.parameterName = pn;
+                            }
+                            ImGui::EndCombo();
+                        }
+                        ImGui::PopItemWidth();
+                    } else {
+                        char paramBuf[64];
+                        strncpy_s(paramBuf, state->blendTree.parameterName.c_str(), sizeof(paramBuf) - 1);
+                        ImGui::PushItemWidth(-1);
+                        if (ImGui::InputText("##btParam", paramBuf, sizeof(paramBuf)))
+                            state->blendTree.parameterName = paramBuf;
+                        ImGui::PopItemWidth();
+                    }
+
                     ImGui::Checkbox("2D Blend", &state->blendTree.is2D);
                     if (state->blendTree.is2D) {
-                        ImGui::TextDisabled("Y Parameter:");
-                        char paramYBuf[64];
-                        strncpy_s(paramYBuf, state->blendTree.parameterYName.c_str(), sizeof(paramYBuf) - 1);
-                        ImGui::PushItemWidth(-1);
-                        if (ImGui::InputText("##btParamY", paramYBuf, sizeof(paramYBuf)))
-                            state->blendTree.parameterYName = paramYBuf;
-                        ImGui::PopItemWidth();
+                        ImGui::TextDisabled("Parameter Y:");
+                        if (!pList.empty()) {
+                            ImGui::PushItemWidth(-1);
+                            if (ImGui::BeginCombo("##btParamYCombo", state->blendTree.parameterYName.empty() ? "(select param)" : state->blendTree.parameterYName.c_str())) {
+                                for (const auto& pn : pList) {
+                                    bool sSelected = (pn == state->blendTree.parameterYName);
+                                    if (ImGui::Selectable(pn.c_str(), sSelected)) state->blendTree.parameterYName = pn;
+                                }
+                                ImGui::EndCombo();
+                            }
+                            ImGui::PopItemWidth();
+                        } else {
+                            char paramYBuf[64];
+                            strncpy_s(paramYBuf, state->blendTree.parameterYName.c_str(), sizeof(paramYBuf) - 1);
+                            ImGui::PushItemWidth(-1);
+                            if (ImGui::InputText("##btParamY", paramYBuf, sizeof(paramYBuf)))
+                                state->blendTree.parameterYName = paramYBuf;
+                            ImGui::PopItemWidth();
+                        }
                     }
 
                     ImGui::Spacing();
@@ -3762,22 +4191,31 @@ void EditorUI::drawAnimatorControllerWindow() {
                     for (int bi = 0; bi < (int)state->blendTree.nodes.size(); ++bi) {
                         ImGui::PushID(bi);
                         auto& bn = state->blendTree.nodes[bi];
-                        ImGui::PushItemWidth(90);
-                        ImGui::DragFloat("##th", &bn.threshold, 0.01f, -100.0f, 100.0f, "%.2f");
-                        ImGui::PopItemWidth();
+                        if (state->blendTree.is2D) {
+                            ImGui::PushItemWidth(110);
+                            ImGui::DragFloat2("##th2D", &bn.threshold2D.x, 0.05f, -100.0f, 100.0f, "%.2f");
+                            ImGui::PopItemWidth();
+                        } else {
+                            ImGui::PushItemWidth(70);
+                            ImGui::DragFloat("##th", &bn.threshold, 0.05f, -100.0f, 100.0f, "%.2f");
+                            ImGui::PopItemWidth();
+                        }
                         ImGui::SameLine();
                         ImGui::PushItemWidth(-30);
                         if (ImGui::BeginCombo("##bnClip", bn.clipName.empty() ? "(none)" : bn.clipName.c_str())) {
                             if (ImGui::Selectable("(none)", bn.clipName.empty())) bn.clipName.clear();
                             for (const auto& cn : clipNames) {
                                 bool s2 = (cn == bn.clipName);
-                                if (ImGui::Selectable(cn.c_str(), s2)) bn.clipName = cn;
+                                if (ImGui::Selectable(cn.c_str(), s2)) {
+                                    bn.clipName = cn;
+                                    ensureClipLoaded(animator, registry, selectedEntity, cn, renderer);
+                                }
                             }
                             ImGui::EndCombo();
                         }
                         if (ImGui::BeginDragDropTarget()) {
-                            if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DND_PAYLOAD_ASSET_PATH")) {
-                                const char* droppedPath = (const char*)payload->Data;
+                            std::string droppedPath = acceptDroppedAssetPath();
+                            if (!droppedPath.empty()) {
                                 std::string resName = processDroppedAnimationAsset(droppedPath);
                                 if (!resName.empty()) {
                                     bn.clipName = resName;
@@ -3856,7 +4294,7 @@ void EditorUI::drawAnimatorControllerWindow() {
                 s_ctrlGraph.addOutputPin(nodeId, "Out", pinState);
             },
             nullptr,
-            [controller, clipNames, processDroppedAnimationAsset, this](Engine::Node& n) {
+            [controller, animator, clipNames, processDroppedAnimationAsset, this](Engine::Node& n) {
 
                 // Re-use the same logic: userData points to an AnimationState
                 if (!n.userData) { ImGui::TextDisabled("Invalid state reference."); return; }
@@ -3892,26 +4330,68 @@ void EditorUI::drawAnimatorControllerWindow() {
                 ImGui::Spacing();
 
                 // Parameter name(s)
+                std::vector<std::string> pList;
+                if (controller) {
+                    for (const auto& [pn, pv] : controller->parameters) pList.push_back(pn);
+                }
+
                 if (!state->blendTree.is2D) {
                     ImGui::TextDisabled("Parameter (X):");
-                    char pBuf[64]; strncpy_s(pBuf, state->blendTree.parameterName.c_str(), sizeof(pBuf)-1);
-                    ImGui::PushItemWidth(-1);
-                    if (ImGui::InputText("##btP", pBuf, sizeof(pBuf)))
-                        state->blendTree.parameterName = pBuf;
-                    ImGui::PopItemWidth();
+                    if (!pList.empty()) {
+                        ImGui::PushItemWidth(-1);
+                        if (ImGui::BeginCombo("##btPCombo", state->blendTree.parameterName.empty() ? "(select param)" : state->blendTree.parameterName.c_str())) {
+                            for (const auto& pn : pList) {
+                                bool sSel = (pn == state->blendTree.parameterName);
+                                if (ImGui::Selectable(pn.c_str(), sSel)) state->blendTree.parameterName = pn;
+                            }
+                            ImGui::EndCombo();
+                        }
+                        ImGui::PopItemWidth();
+                    } else {
+                        char pBuf[64]; strncpy_s(pBuf, state->blendTree.parameterName.c_str(), sizeof(pBuf)-1);
+                        ImGui::PushItemWidth(-1);
+                        if (ImGui::InputText("##btP", pBuf, sizeof(pBuf)))
+                            state->blendTree.parameterName = pBuf;
+                        ImGui::PopItemWidth();
+                    }
                 } else {
                     ImGui::TextDisabled("Parameter X:");
-                    char pBuf[64]; strncpy_s(pBuf, state->blendTree.parameterName.c_str(), sizeof(pBuf)-1);
-                    ImGui::PushItemWidth(-1);
-                    if (ImGui::InputText("##btPX", pBuf, sizeof(pBuf)))
-                        state->blendTree.parameterName = pBuf;
-                    ImGui::PopItemWidth();
+                    if (!pList.empty()) {
+                        ImGui::PushItemWidth(-1);
+                        if (ImGui::BeginCombo("##btPXCombo", state->blendTree.parameterName.empty() ? "(select param)" : state->blendTree.parameterName.c_str())) {
+                            for (const auto& pn : pList) {
+                                bool sSel = (pn == state->blendTree.parameterName);
+                                if (ImGui::Selectable(pn.c_str(), sSel)) state->blendTree.parameterName = pn;
+                            }
+                            ImGui::EndCombo();
+                        }
+                        ImGui::PopItemWidth();
+                    } else {
+                        char pBuf[64]; strncpy_s(pBuf, state->blendTree.parameterName.c_str(), sizeof(pBuf)-1);
+                        ImGui::PushItemWidth(-1);
+                        if (ImGui::InputText("##btPX", pBuf, sizeof(pBuf)))
+                            state->blendTree.parameterName = pBuf;
+                        ImGui::PopItemWidth();
+                    }
+
                     ImGui::TextDisabled("Parameter Y:");
-                    char pyBuf[64]; strncpy_s(pyBuf, state->blendTree.parameterYName.c_str(), sizeof(pyBuf)-1);
-                    ImGui::PushItemWidth(-1);
-                    if (ImGui::InputText("##btPY", pyBuf, sizeof(pyBuf)))
-                        state->blendTree.parameterYName = pyBuf;
-                    ImGui::PopItemWidth();
+                    if (!pList.empty()) {
+                        ImGui::PushItemWidth(-1);
+                        if (ImGui::BeginCombo("##btPYCombo", state->blendTree.parameterYName.empty() ? "(select param)" : state->blendTree.parameterYName.c_str())) {
+                            for (const auto& pn : pList) {
+                                bool sSel = (pn == state->blendTree.parameterYName);
+                                if (ImGui::Selectable(pn.c_str(), sSel)) state->blendTree.parameterYName = pn;
+                            }
+                            ImGui::EndCombo();
+                        }
+                        ImGui::PopItemWidth();
+                    } else {
+                        char pyBuf[64]; strncpy_s(pyBuf, state->blendTree.parameterYName.c_str(), sizeof(pyBuf)-1);
+                        ImGui::PushItemWidth(-1);
+                        if (ImGui::InputText("##btPY", pyBuf, sizeof(pyBuf)))
+                            state->blendTree.parameterYName = pyBuf;
+                        ImGui::PopItemWidth();
+                    }
                 }
 
                 ImGui::Spacing();
@@ -3962,16 +4442,20 @@ void EditorUI::drawAnimatorControllerWindow() {
                             bn.clipName.clear();
                         for (const auto& cn : clipNames) {
                             bool sel = (cn == bn.clipName);
-                            if (ImGui::Selectable(cn.c_str(), sel)) bn.clipName = cn;
+                            if (ImGui::Selectable(cn.c_str(), sel)) {
+                                bn.clipName = cn;
+                                ensureClipLoaded(animator, registry, selectedEntity, cn, renderer);
+                            }
                         }
                         ImGui::EndCombo();
                     }
                     if (ImGui::BeginDragDropTarget()) {
-                        if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DND_PAYLOAD_ASSET_PATH")) {
-                            const char* droppedPath = (const char*)payload->Data;
+                        std::string droppedPath = acceptDroppedAssetPath();
+                        if (!droppedPath.empty()) {
                             std::string resName = processDroppedAnimationAsset(droppedPath);
                             if (!resName.empty()) {
                                 bn.clipName = resName;
+                                ensureClipLoaded(animator, registry, selectedEntity, resName, renderer);
                                 statusMessage = "Set motion clip to '" + resName + "'.";
                             }
                         }
@@ -4004,8 +4488,8 @@ void EditorUI::drawAnimatorControllerWindow() {
                 if (ImGui::Button("+ Add Motion", ImVec2(-1, 0)))
                     state->blendTree.nodes.push_back(BlendNode{});
                 if (ImGui::BeginDragDropTarget()) {
-                    if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DND_PAYLOAD_ASSET_PATH")) {
-                        const char* droppedPath = (const char*)payload->Data;
+                    std::string droppedPath = acceptDroppedAssetPath();
+                    if (!droppedPath.empty()) {
                         std::string resName = processDroppedAnimationAsset(droppedPath);
                         if (!resName.empty()) {
                             BlendNode newBn;
@@ -4109,21 +4593,23 @@ void EditorUI::drawAnimatorControllerWindow() {
             stateNodeIds.push_back(nid);
         }
 
-        // Restore previous selection or select newly created state
+        // Restore previous selection accurately
         uint32_t restoreSelId = 0;
-        for (uint32_t nid : stateNodeIds) {
-            if (Engine::Node* n = s_ctrlGraph.findNode(nid)) {
-                if (n->userData && static_cast<AnimationState*>(n->userData)->name == selectedStateName) {
-                    restoreSelId = nid;
-                    break;
+        if (selectedTypeName == "CtrlEntry") {
+            restoreSelId = entryId;
+        } else if (selectedTypeName == "CtrlAnyState") {
+            restoreSelId = anyId;
+        } else if (!selectedStateName.empty()) {
+            for (uint32_t nid : stateNodeIds) {
+                if (Engine::Node* n = s_ctrlGraph.findNode(nid)) {
+                    if (n->userData && static_cast<AnimationState*>(n->userData)->name == selectedStateName) {
+                        restoreSelId = nid;
+                        break;
+                    }
                 }
             }
         }
-        if (restoreSelId != 0) {
-            s_ctrlGraph.setSelectedNodeId(restoreSelId);
-        } else if (!stateNodeIds.empty()) {
-            s_ctrlGraph.setSelectedNodeId(stateNodeIds.back());
-        }
+        s_ctrlGraph.setSelectedNodeId(restoreSelId);
 
         // -----------------------------------------------------------------------
         // Spawn links for existing transitions
@@ -4205,6 +4691,7 @@ void EditorUI::drawAnimatorControllerWindow() {
             if (from == "__Entry__") {
                 controller->currentState = to;
                 controller->currentStateTime = 0.0f;
+                s_lastCurrentState = controller->currentState;
                 statusMessage = "Set default active state to '" + to + "'.";
                 return;
             }
@@ -4218,6 +4705,7 @@ void EditorUI::drawAnimatorControllerWindow() {
             newTrans.toState   = to;
             newTrans.crossfadeDuration = 0.2f;
             controller->transitions.push_back(newTrans);
+            s_lastTransitionCount = controller->transitions.size();
         };
 
         s_ctrlGraph.onLinkDeleted = [controller, anyId, entryId, this](uint32_t fromPin, uint32_t toPin) {
@@ -4238,6 +4726,7 @@ void EditorUI::drawAnimatorControllerWindow() {
             if (from == "__Entry__") {
                 if (controller->currentState == to) {
                     controller->currentState.clear();
+                    s_lastCurrentState = controller->currentState;
                     statusMessage = "Cleared default active state.";
                 }
                 return;
@@ -4249,6 +4738,7 @@ void EditorUI::drawAnimatorControllerWindow() {
                         return t.fromState == from && t.toState == to;
                     }),
                 controller->transitions.end());
+            s_lastTransitionCount = controller->transitions.size();
         };
 
         // When a state node is deleted, remove the matching AnimationState
@@ -4322,16 +4812,27 @@ void EditorUI::drawAnimatorControllerWindow() {
             if (!selNode || !selNode->userData) return;
             AnimationState* state = static_cast<AnimationState*>(selNode->userData);
             std::string clipName = processDroppedAnimationAsset(assetPath);
-            if (clipName.empty()) return;
+            std::string relPath = assetPath;
+            try {
+                std::filesystem::path p(assetPath);
+                if (p.is_absolute()) {
+                    relPath = std::filesystem::relative(p, std::filesystem::current_path()).generic_string();
+                } else {
+                    relPath = p.generic_string();
+                }
+            } catch (...) {}
+
+            std::string storedName = clipName.empty() ? relPath : clipName;
+            if (storedName.empty()) return;
 
             if (!state->isBlendTree) {
-                state->clipName = clipName;
-                statusMessage = "Assigned animation clip '" + clipName + "' to state '" + state->name + "'.";
+                state->clipName = storedName;
+                statusMessage = "Assigned animation clip '" + storedName + "' to state '" + state->name + "'.";
             } else {
                 BlendNode bn;
-                bn.clipName = clipName;
+                bn.clipName = storedName;
                 state->blendTree.nodes.push_back(bn);
-                statusMessage = "Added motion clip '" + clipName + "' to blend tree.";
+                statusMessage = "Added motion clip '" + storedName + "' to blend tree.";
             }
         };
 
@@ -4437,6 +4938,14 @@ void EditorUI::drawAnimatorControllerWindow() {
     // --- Center + Right: NodeGraph (framework renders canvas + detail panel) ---
     float graphW = avail.x - leftW - 4.0f;
     s_ctrlGraph.draw("AnimCtrlGraph", ImVec2(graphW, avail.y), 260.0f);
+
+    // Sync dragged node positions back so node dragging is continuously saved
+    for (const auto& gn : s_ctrlGraph.getNodes()) {
+        if (gn.userData) {
+            AnimationState* st = static_cast<AnimationState*>(gn.userData);
+            s_statePositions[st->name] = gn.position;
+        }
+    }
 
     ImGui::End();
 }

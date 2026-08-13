@@ -933,18 +933,33 @@ static bool registerBuiltinComponents() {
                     out << JSONUtils::indent(indent + 2) << "\"zOffset\": " << layer.zOffset << ",\n";
                     out << JSONUtils::indent(indent + 2) << "\"tag\": " << JSONUtils::quote(layer.tag) << ",\n";
                     out << JSONUtils::indent(indent + 2) << "\"isVisible\": " << (layer.isVisible ? "true" : "false") << ",\n";
-                    out << JSONUtils::indent(indent + 2) << "\"tiles\": [";
-                    for (size_t i = 0; i < layer.tiles.size(); ++i) {
-                        out << layer.tiles[i];
-                        if (i + 1 < layer.tiles.size()) out << ", ";
+                    out << JSONUtils::indent(indent + 2) << "\"isCollision\": " << (layer.isCollision ? "true" : "false") << ",\n";
+                    out << JSONUtils::indent(indent + 2) << "\"chunks\": [\n";
+
+                    size_t cIdx = 0;
+                    for (const auto& [key, chunk] : layer.chunks) {
+                        int cx, cy;
+                        Engine::unpackChunkKey(key, cx, cy);
+                        out << JSONUtils::indent(indent + 3) << "{\n";
+                        out << JSONUtils::indent(indent + 4) << "\"cx\": " << cx << ",\n";
+                        out << JSONUtils::indent(indent + 4) << "\"cy\": " << cy << ",\n";
+                        out << JSONUtils::indent(indent + 4) << "\"tiles\": [";
+                        for (int i = 0; i < Engine::TILE_CHUNK_SIZE * Engine::TILE_CHUNK_SIZE; ++i) {
+                            out << chunk.tiles[i];
+                            if (i + 1 < Engine::TILE_CHUNK_SIZE * Engine::TILE_CHUNK_SIZE) out << ", ";
+                        }
+                        out << "],\n";
+                        out << JSONUtils::indent(indent + 4) << "\"rotations\": [";
+                        for (int i = 0; i < Engine::TILE_CHUNK_SIZE * Engine::TILE_CHUNK_SIZE; ++i) {
+                            out << (int)chunk.rotations[i];
+                            if (i + 1 < Engine::TILE_CHUNK_SIZE * Engine::TILE_CHUNK_SIZE) out << ", ";
+                        }
+                        out << "]\n";
+                        out << JSONUtils::indent(indent + 3) << "}";
+                        if (++cIdx < layer.chunks.size()) out << ",";
+                        out << "\n";
                     }
-                    out << "],\n";
-                    out << JSONUtils::indent(indent + 2) << "\"rotations\": [";
-                    for (size_t i = 0; i < layer.rotations.size(); ++i) {
-                        out << (int)layer.rotations[i];
-                        if (i + 1 < layer.rotations.size()) out << ", ";
-                    }
-                    out << "]\n";
+                    out << JSONUtils::indent(indent + 2) << "]\n";
                     out << JSONUtils::indent(indent + 1) << "}";
                     if (l + 1 < tm->layers.size()) out << ",";
                     out << "\n";
@@ -954,7 +969,7 @@ static bool registerBuiltinComponents() {
         },
         [](Registry& registry, VulkanRenderer&, Entity entity, const std::string& json) {
             std::string type = JSONUtils::extractStringValue(json, "entityType");
-            if (type == "Tilemap" || json.find("\"tiles\":") != std::string::npos || json.find("\"layers\":") != std::string::npos) {
+            if (type == "Tilemap" || json.find("\"tiles\":") != std::string::npos || json.find("\"layers\":") != std::string::npos || json.find("\"chunks\":") != std::string::npos) {
                 if (!registry.has<Engine::TilemapComponent>(entity)) {
                     registry.emplace<Engine::TilemapComponent>(entity, Engine::TilemapComponent{});
                 }
@@ -1008,23 +1023,118 @@ static bool registerBuiltinComponents() {
                                         layer.isVisible = true;
                                         size_t visPos = layerJson.find("\"isVisible\":");
                                         if (visPos != std::string::npos) {
-                                            size_t valPos = layerJson.find("false", visPos);
-                                            if (valPos != std::string::npos && valPos - visPos < 20) {
-                                                layer.isVisible = false;
+                                            size_t colonPos = layerJson.find(':', visPos);
+                                            if (colonPos != std::string::npos) {
+                                                std::string valSub = layerJson.substr(colonPos + 1, 12);
+                                                if (valSub.find("false") != std::string::npos) {
+                                                    layer.isVisible = false;
+                                                }
                                             }
                                         }
 
-                                        JSONUtils::extractIntVector(layerJson, "tiles", layer.tiles);
-                                        if (layer.tiles.size() != static_cast<size_t>(tm->width * tm->height)) {
-                                            layer.tiles.resize(tm->width * tm->height, -1);
+                                        layer.isCollision = false;
+                                        size_t colPos = layerJson.find("\"isCollision\":");
+                                        if (colPos != std::string::npos) {
+                                            size_t colonPos = layerJson.find(':', colPos);
+                                            if (colonPos != std::string::npos) {
+                                                std::string valSub = layerJson.substr(colonPos + 1, 12);
+                                                if (valSub.find("true") != std::string::npos) {
+                                                    layer.isCollision = true;
+                                                }
+                                            }
+                                        } else {
+                                            std::string lowerTag = layer.tag;
+                                            for (char& c : lowerTag) c = (char)::tolower((unsigned char)c);
+                                            if (lowerTag.find("obstacle") != std::string::npos) {
+                                                layer.isCollision = true;
+                                            }
                                         }
 
-                                        std::vector<int> rotInts;
-                                        JSONUtils::extractIntVector(layerJson, "rotations", rotInts);
-                                        layer.rotations.resize(layer.tiles.size(), 0);
-                                        for (size_t i = 0; i < rotInts.size() && i < layer.rotations.size(); ++i) {
-                                            layer.rotations[i] = static_cast<uint8_t>(rotInts[i]);
+                                        // 1. Check for chunked format ("chunks": [...])
+                                        size_t chunksPos = layerJson.find("\"chunks\":");
+                                        if (chunksPos != std::string::npos) {
+                                            size_t cStart = layerJson.find('[', chunksPos);
+                                            if (cStart != std::string::npos) {
+                                                int cDepth = 1;
+                                                size_t cEnd = cStart + 1;
+                                                while (cEnd < layerJson.size() && cDepth > 0) {
+                                                    if (layerJson[cEnd] == '[') cDepth++;
+                                                    else if (layerJson[cEnd] == ']') cDepth--;
+                                                    cEnd++;
+                                                }
+                                                if (cDepth == 0) {
+                                                    std::string chunksArrayStr = layerJson.substr(cStart + 1, (cEnd - 1) - cStart - 1);
+                                                    size_t cSearch = 0;
+                                                    while (true) {
+                                                        size_t chunkOpen = chunksArrayStr.find('{', cSearch);
+                                                        if (chunkOpen == std::string::npos) break;
+
+                                                        int chDepth = 1;
+                                                        size_t chunkClose = chunkOpen + 1;
+                                                        while (chunkClose < chunksArrayStr.size() && chDepth > 0) {
+                                                            if (chunksArrayStr[chunkClose] == '{') chDepth++;
+                                                            else if (chunksArrayStr[chunkClose] == '}') chDepth--;
+                                                            chunkClose++;
+                                                        }
+
+                                                        if (chDepth == 0) {
+                                                            std::string chunkJson = chunksArrayStr.substr(chunkOpen, chunkClose - chunkOpen);
+                                                            float cxVal = 0.f, cyVal = 0.f;
+                                                            JSONUtils::extractFloatValue(chunkJson, "cx", cxVal);
+                                                            JSONUtils::extractFloatValue(chunkJson, "cy", cyVal);
+                                                            int cx = static_cast<int>(cxVal);
+                                                            int cy = static_cast<int>(cyVal);
+
+                                                            Engine::TileChunk chunk;
+                                                            std::vector<int> chunkTiles, chunkRots;
+                                                            JSONUtils::extractIntVector(chunkJson, "tiles", chunkTiles);
+                                                            JSONUtils::extractIntVector(chunkJson, "rotations", chunkRots);
+
+                                                            for (size_t i = 0; i < chunkTiles.size() && i < Engine::TILE_CHUNK_SIZE * Engine::TILE_CHUNK_SIZE; ++i) {
+                                                                chunk.tiles[i] = chunkTiles[i];
+                                                            }
+                                                            for (size_t i = 0; i < chunkRots.size() && i < Engine::TILE_CHUNK_SIZE * Engine::TILE_CHUNK_SIZE; ++i) {
+                                                                chunk.rotations[i] = static_cast<uint8_t>(chunkRots[i]);
+                                                            }
+                                                            if (!chunk.isEmpty()) {
+                                                                layer.chunks[Engine::packChunkKey(cx, cy)] = chunk;
+                                                            }
+                                                        }
+                                                        cSearch = chunkClose;
+                                                    }
+                                                }
+                                            }
+                                        } else {
+                                            // 2. Migration fallback for legacy flat tiles array ("tiles": [...]) ONLY if "chunks" is not present
+                                            std::vector<int> legacyTiles, legacyRotInts;
+                                            if (JSONUtils::extractIntVector(layerJson, "tiles", legacyTiles) && !legacyTiles.empty()) {
+                                                JSONUtils::extractIntVector(layerJson, "rotations", legacyRotInts);
+                                                int w = (tm->width > 0) ? tm->width : 32;
+                                                int h = (tm->height > 0) ? tm->height : 32;
+
+                                                for (int y = 0; y < h; ++y) {
+                                                    for (int x = 0; x < w; ++x) {
+                                                        int cellIdx = y * w + x;
+                                                        if (cellIdx < static_cast<int>(legacyTiles.size())) {
+                                                            int tileId = legacyTiles[cellIdx];
+                                                            if (tileId != -1) {
+                                                                uint8_t rot = (cellIdx < static_cast<int>(legacyRotInts.size())) ? static_cast<uint8_t>(legacyRotInts[cellIdx]) : 0;
+                                                                int cx = static_cast<int>(std::floor(static_cast<float>(x) / Engine::TILE_CHUNK_SIZE));
+                                                                int cy = static_cast<int>(std::floor(static_cast<float>(y) / Engine::TILE_CHUNK_SIZE));
+                                                                int lx = (x % Engine::TILE_CHUNK_SIZE + Engine::TILE_CHUNK_SIZE) % Engine::TILE_CHUNK_SIZE;
+                                                                int ly = (y % Engine::TILE_CHUNK_SIZE + Engine::TILE_CHUNK_SIZE) % Engine::TILE_CHUNK_SIZE;
+                                                                int64_t key = Engine::packChunkKey(cx, cy);
+
+                                                                auto& chunk = layer.chunks[key];
+                                                                chunk.tiles[ly * Engine::TILE_CHUNK_SIZE + lx] = tileId;
+                                                                chunk.rotations[ly * Engine::TILE_CHUNK_SIZE + lx] = rot;
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
                                         }
+
                                         tm->layers.push_back(layer);
                                     }
                                     searchPos = closeBrace;
@@ -1034,42 +1144,11 @@ static bool registerBuiltinComponents() {
                     }
 
                     if (tm->layers.empty()) {
-                        std::vector<int> tilesList;
-                        if (JSONUtils::extractIntVector(json, "tiles", tilesList)) {
-                            Engine::TilemapLayer groundLayer;
-                            groundLayer.name = "Ground";
-                            groundLayer.zOffset = 0.0f;
-                            groundLayer.tag = "ground";
-                            groundLayer.isVisible = true;
-                            groundLayer.tiles = std::move(tilesList);
-                            if (groundLayer.tiles.size() != static_cast<size_t>(tm->width * tm->height)) {
-                                groundLayer.tiles.resize(tm->width * tm->height, -1);
-                            }
-                            tm->layers.push_back(groundLayer);
-                        }
-
-                        std::vector<int> obsList;
-                        if (JSONUtils::extractIntVector(json, "obstacleTiles", obsList)) {
-                            Engine::TilemapLayer obstacleLayer;
-                            obstacleLayer.name = "Obstacles";
-                            obstacleLayer.zOffset = 0.01f;
-                            obstacleLayer.tag = "obstacle";
-                            obstacleLayer.isVisible = true;
-                            obstacleLayer.tiles = std::move(obsList);
-                            if (obstacleLayer.tiles.size() != static_cast<size_t>(tm->width * tm->height)) {
-                                obstacleLayer.tiles.resize(tm->width * tm->height, -1);
-                            }
-                            tm->layers.push_back(obstacleLayer);
-                        }
-                    }
-
-                    if (tm->layers.empty()) {
                         Engine::TilemapLayer defaultLayer;
                         defaultLayer.name = "Ground";
                         defaultLayer.zOffset = 0.0f;
                         defaultLayer.tag = "ground";
                         defaultLayer.isVisible = true;
-                        defaultLayer.tiles.assign(tm->width * tm->height, -1);
                         tm->layers.push_back(defaultLayer);
                     }
 

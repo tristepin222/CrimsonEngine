@@ -26,6 +26,7 @@
 #include "scenes/Scene.hpp"
 #include "scenes/SceneManager.hpp"
 
+#include <set>
 #include <GLFW/glfw3.h>
 #include <imgui.h>
 #include <algorithm>
@@ -35,6 +36,19 @@
 
 using namespace ImGui;
 using namespace std;
+
+static std::string acceptDroppedAssetPath() {
+    if (const ImGuiPayload* payload = AcceptDragDropPayload("DND_PAYLOAD_ASSET_PATH")) {
+        return std::string((const char*)payload->Data);
+    }
+    if (const ImGuiPayload* payload = AcceptDragDropPayload("DND_PAYLOAD_MULTI_ASSETS")) {
+        std::string s((const char*)payload->Data);
+        size_t pipe = s.find('|');
+        if (pipe != std::string::npos) s = s.substr(0, pipe);
+        return s;
+    }
+    return "";
+}
 
 void EditorUI::drawSectionHeader(const std::string& title) {
     Spacing();
@@ -625,14 +639,15 @@ void EditorUI::drawAnimatorEditor() {
 
     InputText("Anim Path", animPathBuf, sizeof(animPathBuf));
     if (BeginDragDropTarget()) {
-        if (const ImGuiPayload* payload = AcceptDragDropPayload("DND_PAYLOAD_ASSET_PATH")) {
-            const char* droppedPath = (const char*)payload->Data;
-            std::string pathStr(droppedPath);
+        std::string pathStr = acceptDroppedAssetPath();
+        if (!pathStr.empty()) {
             auto ext = std::filesystem::path(pathStr).extension().string();
-            if (ext == ".fbx" || ext == ".FBX" || ext == ".anim" || ext == ".gltf" || ext == ".glb") {
+            std::string lowerExt = ext;
+            std::transform(lowerExt.begin(), lowerExt.end(), lowerExt.begin(), ::tolower);
+            if (lowerExt == ".fbx" || lowerExt == ".anim" || lowerExt == ".gltf" || lowerExt == ".glb") {
                 strncpy_s(animPathBuf, pathStr.c_str(), sizeof(animPathBuf) - 1);
                 
-                bool isAnimFile = (ext == ".anim");
+                bool isAnimFile = (lowerExt == ".anim");
                 SkeletonComponent* skeleton = registry.get<SkeletonComponent>(selectedEntity);
                 if (!skeleton && !isAnimFile) {
                     SkeletonComponent newSkel{};
@@ -641,11 +656,12 @@ void EditorUI::drawAnimatorEditor() {
                 }
                 
                 bool loaded = false;
-                if (skeleton) {
-                    loaded = renderer.resourceManager->loadSkeletonAndAnimations(pathStr, *skeleton, *animator);
+                if (isAnimFile) {
+                    SkeletonComponent dummySkel;
+                    loaded = renderer.resourceManager->loadBinarySkeletonAndAnimations(pathStr, skeleton ? *skeleton : dummySkel, *animator);
                 } else {
                     SkeletonComponent dummySkel;
-                    loaded = renderer.resourceManager->loadSkeletonAndAnimations(pathStr, dummySkel, *animator);
+                    loaded = renderer.resourceManager->loadSkeletonAndAnimations(pathStr, skeleton ? *skeleton : dummySkel, *animator);
                 }
                 
                 if (loaded) {
@@ -680,11 +696,12 @@ void EditorUI::drawAnimatorEditor() {
         }
         
         bool loaded = false;
-        if (skeleton) {
-            loaded = renderer.resourceManager->loadSkeletonAndAnimations(pathStr, *skeleton, *animator);
+        if (isAnimFile) {
+            SkeletonComponent dummySkel;
+            loaded = renderer.resourceManager->loadBinarySkeletonAndAnimations(pathStr, skeleton ? *skeleton : dummySkel, *animator);
         } else {
             SkeletonComponent dummySkel;
-            loaded = renderer.resourceManager->loadSkeletonAndAnimations(pathStr, dummySkel, *animator);
+            loaded = renderer.resourceManager->loadSkeletonAndAnimations(pathStr, skeleton ? *skeleton : dummySkel, *animator);
         }
         
         if (loaded) {
@@ -967,12 +984,79 @@ void EditorUI::drawAnimationControllerEditor() {
     }
 
     AnimatorComponent* animator = registry.get<AnimatorComponent>(selectedEntity);
-    std::vector<const char*> clipNames;
-    if (animator) {
-        for (const auto& anim : animator->animations) {
-            clipNames.push_back(anim.name.c_str());
+    if (!animator) {
+        registry.emplace<AnimatorComponent>(selectedEntity, AnimatorComponent{});
+        animator = registry.get<AnimatorComponent>(selectedEntity);
+    }
+
+    Checkbox("Preview Mode", &animator->isPreviewing);
+    ImGui::Spacing();
+
+    auto ensureClipLoadedInInspector = [&](const std::string& cName) {
+        if (cName.empty() || !animator) return;
+        for (const auto& cl : animator->animations) {
+            if (cl.name == cName || std::filesystem::path(cl.name).stem().string() == cName) return;
+        }
+        std::vector<std::string> candidates = {
+            cName, cName + ".anim",
+            "assets/" + cName, "assets/" + cName + ".anim",
+            "assets/animations/" + cName, "assets/animations/" + cName + ".anim"
+        };
+        SkeletonComponent* skeleton = registry.get<SkeletonComponent>(selectedEntity);
+        SkeletonComponent dummySkel;
+        for (const auto& cand : candidates) {
+            if (std::filesystem::exists(cand)) {
+                renderer.resourceManager->loadBinarySkeletonAndAnimations(cand, skeleton ? *skeleton : dummySkel, *animator, true);
+                return;
+            }
+        }
+    };
+
+    for (const auto& st : controller->states) {
+        if (st.isBlendTree) {
+            for (const auto& bn : st.blendTree.nodes) ensureClipLoadedInInspector(bn.clipName);
+        } else {
+            ensureClipLoadedInInspector(st.clipName);
         }
     }
+
+    std::vector<std::string> clipNames;
+    std::set<std::string> seenClips;
+    if (animator) {
+        for (const auto& anim : animator->animations) {
+            if (!anim.name.empty() && seenClips.find(anim.name) == seenClips.end()) {
+                seenClips.insert(anim.name);
+                clipNames.push_back(anim.name);
+            }
+            std::string stem = std::filesystem::path(anim.name).stem().string();
+            if (!stem.empty() && seenClips.find(stem) == seenClips.end()) {
+                seenClips.insert(stem);
+                clipNames.push_back(stem);
+            }
+        }
+    }
+    try {
+        if (std::filesystem::exists("assets")) {
+            for (const auto& entry : std::filesystem::recursive_directory_iterator("assets")) {
+                if (entry.is_regular_file()) {
+                    std::string ext = entry.path().extension().string();
+                    for (char& c : ext) c = (char)std::tolower((unsigned char)c);
+                    if (ext == ".anim") {
+                        std::string relPath = entry.path().generic_string();
+                        std::string stem = entry.path().stem().string();
+                        if (seenClips.find(stem) == seenClips.end()) {
+                            seenClips.insert(stem);
+                            clipNames.push_back(stem);
+                        }
+                        if (seenClips.find(relPath) == seenClips.end()) {
+                            seenClips.insert(relPath);
+                            clipNames.push_back(relPath);
+                        }
+                    }
+                }
+            }
+        }
+    } catch (...) {}
 
     // 1. Parameters management
     if (TreeNode("Parameters")) {
@@ -1031,23 +1115,25 @@ void EditorUI::drawAnimationControllerEditor() {
                 Checkbox("Is Blend Tree", &state.isBlendTree);
 
                 if (!state.isBlendTree) {
-                    int currentClipIdx = 0;
-                    for (size_t i = 0; i < clipNames.size(); ++i) {
-                        if (clipNames[i] == state.clipName) {
-                            currentClipIdx = static_cast<int>(i);
-                            break;
+                    if (ImGui::BeginCombo("Animation Clip", state.clipName.empty() ? "(none)" : state.clipName.c_str())) {
+                        if (ImGui::Selectable("(none)", state.clipName.empty())) state.clipName.clear();
+                        for (const auto& cn : clipNames) {
+                            bool sel = (cn == state.clipName);
+                            if (ImGui::Selectable(cn.c_str(), sel)) {
+                                state.clipName = cn;
+                                ensureClipLoadedInInspector(cn);
+                            }
                         }
-                    }
-                    if (Combo("Animation Clip", &currentClipIdx, clipNames.data(), static_cast<int>(clipNames.size()))) {
-                        state.clipName = clipNames[currentClipIdx];
+                        ImGui::EndCombo();
                     }
                     if (BeginDragDropTarget()) {
-                        if (const ImGuiPayload* payload = AcceptDragDropPayload("DND_PAYLOAD_ASSET_PATH")) {
-                            const char* droppedPath = (const char*)payload->Data;
-                            std::string pathStr(droppedPath);
+                        std::string pathStr = acceptDroppedAssetPath();
+                        if (!pathStr.empty()) {
                             auto ext = std::filesystem::path(pathStr).extension().string();
-                            if (ext == ".anim" || ext == ".fbx" || ext == ".FBX") {
-                                bool isAnimFile = (ext == ".anim");
+                            std::string lowerExt = ext;
+                            std::transform(lowerExt.begin(), lowerExt.end(), lowerExt.begin(), ::tolower);
+                            if (lowerExt == ".anim" || lowerExt == ".fbx" || lowerExt == ".gltf" || lowerExt == ".glb") {
+                                bool isAnimFile = (lowerExt == ".anim");
                                 SkeletonComponent* skeleton = registry.get<SkeletonComponent>(selectedEntity);
                                 if (!skeleton && !isAnimFile) {
                                     SkeletonComponent newSkel{};
@@ -1061,11 +1147,12 @@ void EditorUI::drawAnimationControllerEditor() {
                                 }
                                 
                                 bool loaded = false;
-                                if (skeleton) {
-                                    loaded = renderer.resourceManager->loadSkeletonAndAnimations(pathStr, *skeleton, *animator, true);
+                                if (isAnimFile) {
+                                    SkeletonComponent dummySkel;
+                                    loaded = renderer.resourceManager->loadBinarySkeletonAndAnimations(pathStr, skeleton ? *skeleton : dummySkel, *animator, true);
                                 } else {
                                     SkeletonComponent dummySkel;
-                                    loaded = renderer.resourceManager->loadSkeletonAndAnimations(pathStr, dummySkel, *animator, true);
+                                    loaded = renderer.resourceManager->loadSkeletonAndAnimations(pathStr, skeleton ? *skeleton : dummySkel, *animator, true);
                                 }
                                 
                                 if (loaded) {
@@ -1119,25 +1206,28 @@ void EditorUI::drawAnimationControllerEditor() {
 
                         for (size_t nIdx = 0; nIdx < state.blendTree.nodes.size(); ++nIdx) {
                             auto& node = state.blendTree.nodes[nIdx];
-                            std::string nodeHeader = "Node " + std::to_string(nIdx) + ": " + node.clipName + "##node_" + std::to_string(nIdx);
+                            std::string cLabel = node.clipName.empty() ? "(none)" : node.clipName;
+                            std::string nodeHeader = "Node " + std::to_string(nIdx) + ": " + cLabel + "##node_" + std::to_string(nIdx);
                             if (TreeNode(nodeHeader.c_str())) {
-                                int nodeClipIdx = 0;
-                                for (size_t i = 0; i < clipNames.size(); ++i) {
-                                    if (clipNames[i] == node.clipName) {
-                                        nodeClipIdx = static_cast<int>(i);
-                                        break;
+                                if (ImGui::BeginCombo("Clip Name", node.clipName.empty() ? "(none)" : node.clipName.c_str())) {
+                                    if (ImGui::Selectable("(none)", node.clipName.empty())) node.clipName.clear();
+                                    for (const auto& cn : clipNames) {
+                                        bool sel = (cn == node.clipName);
+                                        if (ImGui::Selectable(cn.c_str(), sel)) {
+                                            node.clipName = cn;
+                                            ensureClipLoadedInInspector(cn);
+                                        }
                                     }
-                                }
-                                if (Combo("Clip Name", &nodeClipIdx, clipNames.data(), static_cast<int>(clipNames.size()))) {
-                                    node.clipName = clipNames[nodeClipIdx];
+                                    ImGui::EndCombo();
                                 }
                                 if (BeginDragDropTarget()) {
-                                    if (const ImGuiPayload* payload = AcceptDragDropPayload("DND_PAYLOAD_ASSET_PATH")) {
-                                        const char* droppedPath = (const char*)payload->Data;
-                                        std::string pathStr(droppedPath);
+                                    std::string pathStr = acceptDroppedAssetPath();
+                                    if (!pathStr.empty()) {
                                         auto ext = std::filesystem::path(pathStr).extension().string();
-                                        if (ext == ".anim" || ext == ".fbx" || ext == ".FBX") {
-                                            bool isAnimFile = (ext == ".anim");
+                                        std::string lowerExt = ext;
+                                        std::transform(lowerExt.begin(), lowerExt.end(), lowerExt.begin(), ::tolower);
+                                        if (lowerExt == ".anim" || lowerExt == ".fbx" || lowerExt == ".gltf" || lowerExt == ".glb") {
+                                            bool isAnimFile = (lowerExt == ".anim");
                                             SkeletonComponent* skeleton = registry.get<SkeletonComponent>(selectedEntity);
                                             if (!skeleton && !isAnimFile) {
                                                 SkeletonComponent newSkel{};
@@ -1151,11 +1241,12 @@ void EditorUI::drawAnimationControllerEditor() {
                                             }
                                             
                                             bool loaded = false;
-                                            if (skeleton) {
-                                                loaded = renderer.resourceManager->loadSkeletonAndAnimations(pathStr, *skeleton, *animator, true);
+                                            if (isAnimFile) {
+                                                SkeletonComponent dummySkel;
+                                                loaded = renderer.resourceManager->loadBinarySkeletonAndAnimations(pathStr, skeleton ? *skeleton : dummySkel, *animator, true);
                                             } else {
                                                 SkeletonComponent dummySkel;
-                                                loaded = renderer.resourceManager->loadSkeletonAndAnimations(pathStr, dummySkel, *animator, true);
+                                                loaded = renderer.resourceManager->loadSkeletonAndAnimations(pathStr, skeleton ? *skeleton : dummySkel, *animator, true);
                                             }
                                             
                                             if (loaded) {
@@ -1826,34 +1917,19 @@ void EditorUI::drawTilemapInspector() {
         TextDisabled("Drag & drop a .tileset asset onto the field above");
         Spacing();
 
-        int w = tm->width,  h = tm->height;
-        bool changed = false;
-        if (DragInt("Width##tmW",  &w, 1.f, 1, 512)) changed = true;
-        if (DragInt("Height##tmH", &h, 1.f, 1, 512)) changed = true;
-        if (changed) {
-            int newW = std::max(1, w);
-            int newH = std::max(1, h);
-            for (auto& layer : tm->layers) {
-                std::vector<int> newTiles(newW * newH, -1);
-                for (int y = 0; y < std::min(tm->height, newH); ++y) {
-                    for (int x = 0; x < std::min(tm->width, newW); ++x) {
-                        int oldIdx = y * tm->width + x;
-                        if (oldIdx >= 0 && oldIdx < (int)layer.tiles.size()) {
-                            newTiles[y * newW + x] = layer.tiles[oldIdx];
-                        }
-                    }
-                }
-                layer.tiles = std::move(newTiles);
-            }
-            tm->width  = newW;
-            tm->height = newH;
-            tm->isDirty = true;
-        }
-
         DragFloat("Tile Size##tmTS", &tm->tileSize, 0.01f, 0.01f, 100.f);
 
+        int minX = 0, minY = 0, maxX = 0, maxY = 0;
+        tm->getBounds(minX, minY, maxX, maxY);
+        size_t totalChunks = 0;
+        for (const auto& l : tm->layers) totalChunks += l.chunks.size();
+
+        TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "Infinite Tilemap Mode");
+        Text("Active 16x16 Chunks: %zu", totalChunks);
+        Text("Painted Bounds: (%d, %d) to (%d, %d)", minX, minY, maxX, maxY);
+
         Spacing();
-        Text("Layers (Active paint, Visible, Name, Tag, zOffset, Delete):");
+        Text("Layers (Active paint, Visible, Col, Name, Tag, zOffset, Delete):");
 
         int layerToDelete = -1;
         for (int i = 0; i < (int)tm->layers.size(); ++i) {
@@ -1868,8 +1944,13 @@ void EditorUI::drawTilemapInspector() {
             SameLine();
 
             // Visibility checkbox
-            Checkbox("##visible", &layer.isVisible);
-            if (IsItemDeactivatedAfterEdit()) {
+            if (Checkbox("##visible", &layer.isVisible)) {
+                tm->isDirty = true;
+            }
+            SameLine();
+
+            // Collision layer checkbox
+            if (Checkbox("##collision", &layer.isCollision)) {
                 tm->isDirty = true;
             }
             SameLine();
@@ -1927,7 +2008,6 @@ void EditorUI::drawTilemapInspector() {
             newLayer.zOffset = tm->layers.empty() ? 0.0f : (tm->layers.back().zOffset + 0.01f);
             newLayer.tag = "";
             newLayer.isVisible = true;
-            newLayer.tiles.assign(tm->width * tm->height, -1);
             tm->layers.push_back(newLayer);
             tm->isDirty = true;
             statusMessage = "Added layer: " + newLayer.name;
@@ -1936,7 +2016,7 @@ void EditorUI::drawTilemapInspector() {
         Spacing();
         if (Button("Clear All Tiles")) {
             for (auto& layer : tm->layers) {
-                std::fill(layer.tiles.begin(), layer.tiles.end(), -1);
+                layer.chunks.clear();
             }
             tm->isDirty = true;
             statusMessage = "Cleared all tilemap layers.";

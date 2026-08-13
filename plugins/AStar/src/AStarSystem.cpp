@@ -48,43 +48,8 @@ namespace AStar {
     ) {
         std::vector<glm::ivec2> path;
 
-        if (start.x < 0 || start.x >= tilemap.width || start.y < 0 || start.y >= tilemap.height ||
-            end.x < 0 || end.x >= tilemap.width || end.y < 0 || end.y >= tilemap.height) {
-            return path;
-        }
-
         auto isPassable = [&](int x, int y) {
-            int tileIndex = y * tilemap.width + x;
-
-            // Check all layers for obstacle tag
-            for (const auto& layer : tilemap.layers) {
-                std::string lowerTag = layer.tag;
-                for (char& c : lowerTag) c = std::tolower(static_cast<unsigned char>(c));
-
-                if (lowerTag.find("obstacle") != std::string::npos) {
-                    if (tileIndex >= 0 && tileIndex < static_cast<int>(layer.tiles.size())) {
-                        if (layer.tiles[tileIndex] != -1) {
-                            return false; // Blocked by obstacle layer!
-                        }
-                    }
-                }
-            }
-
-            // Fallback check for base layer blocked tile IDs
-            if (!tilemap.layers.empty()) {
-                const auto& baseLayer = tilemap.layers[0];
-                if (tileIndex >= 0 && tileIndex < static_cast<int>(baseLayer.tiles.size())) {
-                    int tileId = baseLayer.tiles[tileIndex];
-                    for (int blocked : blockedTileIds) {
-                        if (tileId == blocked) return false;
-                    }
-                } else {
-                    return false;
-                }
-            } else {
-                return false;
-            }
-            return true;
+            return !tilemap.isTileSolid(x, y);
         };
 
         if (!isPassable(end.x, end.y)) {
@@ -115,7 +80,10 @@ namespace AStar {
         startNode->open = true;
         openList.push_back(startNode);
 
-        while (!openList.empty()) {
+        int iterations = 0;
+        const int maxIterations = 3000;
+
+        while (!openList.empty() && iterations++ < maxIterations) {
             auto bestIt = openList.begin();
             for (auto it = openList.begin(); it != openList.end(); ++it) {
                 if ((*it)->f() < (*bestIt)->f() || ((*it)->f() == (*bestIt)->f() && (*it)->h < (*bestIt)->h)) {
@@ -154,7 +122,6 @@ namespace AStar {
                 int nx = current->x + offset.x;
                 int ny = current->y + offset.y;
 
-                if (nx < 0 || nx >= tilemap.width || ny < 0 || ny >= tilemap.height) continue;
                 if (!isPassable(nx, ny)) continue;
 
                 if (allowDiagonal && offset.x != 0 && offset.y != 0) {
@@ -186,37 +153,7 @@ namespace AStar {
     }
 
     bool isTileBlocked(const Engine::TilemapComponent& tilemap, const glm::ivec2& point, const std::vector<int>& blockedTileIds) {
-        int tileIndex = point.y * tilemap.width + point.x;
-
-        // Check all layers for obstacle tag
-        for (const auto& layer : tilemap.layers) {
-            std::string lowerTag = layer.tag;
-            for (char& c : lowerTag) c = std::tolower(static_cast<unsigned char>(c));
-
-            if (lowerTag.find("obstacle") != std::string::npos) {
-                if (tileIndex >= 0 && tileIndex < static_cast<int>(layer.tiles.size())) {
-                    if (layer.tiles[tileIndex] != -1) {
-                        return true;
-                    }
-                }
-            }
-        }
-
-        // Fallback check for base layer blocked tile IDs
-        if (!tilemap.layers.empty()) {
-            const auto& baseLayer = tilemap.layers[0];
-            if (tileIndex >= 0 && tileIndex < static_cast<int>(baseLayer.tiles.size())) {
-                int tileId = baseLayer.tiles[tileIndex];
-                for (int blocked : blockedTileIds) {
-                    if (tileId == blocked) return true;
-                }
-            } else {
-                return true;
-            }
-        } else {
-            return true;
-        }
-        return false;
+        return tilemap.isTileSolid(point.x, point.y);
     }
 }
 
@@ -278,22 +215,44 @@ void AStarSystem::update(float dt) {
 
         // Recalculate path only if target changed or path is blocked
         if (targetChanged || pathBlocked) {
+            std::vector<glm::ivec2> newPath;
             bool detourFound = false;
             if (pathBlocked && !targetChanged && firstBlockedIdx > 0) {
                 // detouring: recalculate from the node just before the blocked one
                 glm::ivec2 replStart = agent.path[firstBlockedIdx - 1];
                 std::vector<glm::ivec2> detourPath = AStar::findPath(*tilemap, replStart, targetTile, { 1 }, agent.allowDiagonal);
                 if (!detourPath.empty()) {
-                    agent.path.resize(firstBlockedIdx - 1);
-                    agent.path.insert(agent.path.end(), detourPath.begin(), detourPath.end());
+                    newPath = agent.path;
+                    newPath.resize(firstBlockedIdx - 1);
+                    newPath.insert(newPath.end(), detourPath.begin(), detourPath.end());
                     detourFound = true;
                 }
             }
 
             if (!detourFound) {
                 // fall back to full recalculation
-                agent.path = AStar::findPath(*tilemap, currentStart, targetTile, { 1 }, agent.allowDiagonal);
+                newPath = AStar::findPath(*tilemap, currentStart, targetTile, { 1 }, agent.allowDiagonal);
             }
+
+            if (!newPath.empty()) {
+                // Anti-jittering / anti-backtracking: Truncate waypoint 0 if agent has already passed waypoint 0's center towards waypoint 1
+                if (newPath.size() >= 2) {
+                    glm::vec2 w0(newPath[0].x + 0.5f, newPath[0].y + 0.5f);
+                    glm::vec2 w1(newPath[1].x + 0.5f, newPath[1].y + 0.5f);
+                    glm::vec2 agentLocal(localPos.x / tilemap->tileSize, localPos.y / tilemap->tileSize);
+
+                    glm::vec2 dir = glm::normalize(w1 - w0);
+                    glm::vec2 agentVec = agentLocal - w0;
+
+                    if (glm::dot(agentVec, dir) > 0.0f) {
+                        newPath.erase(newPath.begin());
+                    }
+                }
+                agent.path = std::move(newPath);
+            } else {
+                agent.path.clear();
+            }
+
             agent.lastTarget = targetTile;
             agent.lastStart = currentStart;
         }
@@ -309,7 +268,7 @@ void AStarSystem::update(float dt) {
                 float dist = glm::length(toTarget);
 
                 // If close enough to target waypoint, pop and look at next
-                if (dist < 0.15f) {
+                if (dist < 0.10f) {
                     agent.path.erase(agent.path.begin());
                 } else {
                     float step = agent.speed * dt;

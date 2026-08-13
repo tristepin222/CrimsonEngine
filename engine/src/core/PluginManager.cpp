@@ -63,7 +63,13 @@ void PluginManager::scanDirectory(const std::string& dir, bool isScript) {
         context.imguiContext  = ImGui::GetCurrentContext();
 
         std::cout << "[PluginManager] Initializing: " << pathStr << std::endl;
-        initFunc(&context);
+        try {
+            initFunc(&context);
+        } catch (const std::exception& ex) {
+            std::cerr << "[PluginManager] Exception in initFunc for " << pathStr << ": " << ex.what() << std::endl;
+        } catch (...) {
+            std::cerr << "[PluginManager] Unknown exception in initFunc for " << pathStr << std::endl;
+        }
 
         LoadedPlugin plugin;
         plugin.path         = pathStr;

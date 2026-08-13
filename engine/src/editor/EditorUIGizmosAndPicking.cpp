@@ -211,24 +211,20 @@ void EditorUI::handleViewportPicking() {
         return;
     }
 
-    // Brush painting / erasing intercept
+    // Brush painting / erasing intercept — requires a selected TilemapComponent entity
+    if (!hasSelection || !registry.isValid(selectedEntity) || !registry.has<Engine::TilemapComponent>(selectedEntity)) {
+        s_brushModeActive = false;
+        return;
+    }
+
     if (s_brushModeActive || s_tilemapTool == TilemapTool::Eraser) {
         if (!ImGui::GetIO().WantCaptureKeyboard && ImGui::IsKeyPressed(ImGuiKey_R)) {
             s_brushRotation = (s_brushRotation + 1) % 4;
             statusMessage = "Tile rotation: " + std::to_string(s_brushRotation * 90) + " deg";
         }
 
-        if (hasSelection && registry.isValid(selectedEntity) && registry.has<Engine::TilemapComponent>(selectedEntity)) {
-            s_brushTilemapEntity = selectedEntity;
-        }
-        Entity paintTarget = s_brushTilemapEntity;
-        if (!registry.isValid(paintTarget) || !registry.has<Engine::TilemapComponent>(paintTarget)) {
-            for (auto [entity, tm] : registry.view<Engine::TilemapComponent>()) {
-                paintTarget = entity;
-                s_brushTilemapEntity = entity; // Sync back to the editor state
-                break;
-            }
-        }
+        s_brushTilemapEntity = selectedEntity;
+        Entity paintTarget = selectedEntity;
 
         if (registry.isValid(paintTarget)) {
             const bool leftMouseDown = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
@@ -268,30 +264,6 @@ void EditorUI::handleViewportPicking() {
                                     return;
                                 }
 
-                                size_t expectedSize = static_cast<size_t>(tm->width) * tm->height;
-                                if (tm->layers.empty()) {
-                                    Engine::TilemapLayer defaultLayer;
-                                    defaultLayer.name = "Ground";
-                                    defaultLayer.zOffset = 0.0f;
-                                    defaultLayer.tag = "ground";
-                                    defaultLayer.isVisible = true;
-                                    defaultLayer.tiles.assign(expectedSize, -1);
-                                    defaultLayer.rotations.assign(expectedSize, 0);
-                                    tm->layers.push_back(defaultLayer);
-                                    tm->isDirty = true;
-                                }
-
-                                for (auto& layer : tm->layers) {
-                                    if (layer.tiles.size() != expectedSize) {
-                                        layer.tiles.resize(expectedSize, -1);
-                                        tm->isDirty = true;
-                                    }
-                                    if (layer.rotations.size() != expectedSize) {
-                                        layer.rotations.resize(expectedSize, 0);
-                                        tm->isDirty = true;
-                                    }
-                                }
-
                                 glm::mat4 modelMatrix = transform->matrix();
                                 glm::mat4 invModel = glm::inverse(modelMatrix);
 
@@ -306,36 +278,28 @@ void EditorUI::handleViewportPicking() {
                                         int cellX = static_cast<int>(std::floor(hitLocal.x / tm->tileSize));
                                         int cellY = static_cast<int>(std::floor(hitLocal.y / tm->tileSize));
 
-                                        if (cellX >= 0 && cellX < tm->width && cellY >= 0 && cellY < tm->height) {
-                                            int idx = cellY * tm->width + cellX;
-                                            
-                                            // Clamp painting layer to valid bounds
-                                            if (s_tilemapActiveLayer < 0) s_tilemapActiveLayer = 0;
-                                            if (s_tilemapActiveLayer >= (int)tm->layers.size()) {
-                                                s_tilemapActiveLayer = (int)tm->layers.size() - 1;
+                                        // Clamp painting layer to valid bounds
+                                        if (s_tilemapActiveLayer < 0) s_tilemapActiveLayer = 0;
+                                        if (s_tilemapActiveLayer >= (int)tm->layers.size()) {
+                                            s_tilemapActiveLayer = (int)tm->layers.size() - 1;
+                                        }
+
+                                        if (s_tilemapTool == TilemapTool::Pencil || s_tilemapTool == TilemapTool::Eraser || rightMouseDown) {
+                                            int newValue = (leftMouseDown && s_tilemapTool == TilemapTool::Pencil) ? s_brushTileId : -1;
+                                            int currentVal = tm->getTile(s_tilemapActiveLayer, cellX, cellY);
+                                            uint8_t currentRot = tm->getRotation(s_tilemapActiveLayer, cellX, cellY);
+                                            if (currentVal != newValue || (newValue != -1 && currentRot != s_brushRotation)) {
+                                                tm->setTile(s_tilemapActiveLayer, cellX, cellY, newValue, s_brushRotation);
                                             }
-
-                                            auto& targetLayer = tm->layers[s_tilemapActiveLayer];
-
-                                            if (s_tilemapTool == TilemapTool::Pencil || s_tilemapTool == TilemapTool::Eraser || rightMouseDown) {
-                                                int newValue = (leftMouseDown && s_tilemapTool == TilemapTool::Pencil) ? s_brushTileId : -1;
-                                                if (idx >= 0 && idx < static_cast<int>(targetLayer.tiles.size())) {
-                                                    if (targetLayer.tiles[idx] != newValue || (newValue != -1 && targetLayer.rotations[idx] != s_brushRotation)) {
-                                                        targetLayer.tiles[idx] = newValue;
-                                                        targetLayer.rotations[idx] = (newValue != -1) ? s_brushRotation : 0;
-                                                        tm->isDirty = true;
-                                                    }
+                                        } else if (s_tilemapTool == TilemapTool::BoxOutline || s_tilemapTool == TilemapTool::BoxFill) {
+                                            if (leftMouseDown) {
+                                                if (!s_boxDragging) {
+                                                    s_boxDragging = true;
+                                                    s_boxStartCol = cellX;
+                                                    s_boxStartRow = cellY;
                                                 }
-                                            } else if (s_tilemapTool == TilemapTool::BoxOutline || s_tilemapTool == TilemapTool::BoxFill) {
-                                                if (leftMouseDown) {
-                                                    if (!s_boxDragging) {
-                                                        s_boxDragging = true;
-                                                        s_boxStartCol = cellX;
-                                                        s_boxStartRow = cellY;
-                                                    }
-                                                    s_boxCurrentCol = cellX;
-                                                    s_boxCurrentRow = cellY;
-                                                }
+                                                s_boxCurrentCol = cellX;
+                                                s_boxCurrentRow = cellY;
                                             }
                                         }
                                     }
@@ -349,7 +313,6 @@ void EditorUI::handleViewportPicking() {
                     s_boxDragging = false;
                     auto* tm = registry.get<Engine::TilemapComponent>(paintTarget);
                     if (tm && s_tilemapActiveLayer >= 0 && s_tilemapActiveLayer < static_cast<int>(tm->layers.size())) {
-                        auto& targetLayer = tm->layers[s_tilemapActiveLayer];
                         int minC = std::min(s_boxStartCol, s_boxCurrentCol);
                         int maxC = std::max(s_boxStartCol, s_boxCurrentCol);
                         int minR = std::min(s_boxStartRow, s_boxCurrentRow);
@@ -357,13 +320,9 @@ void EditorUI::handleViewportPicking() {
 
                         for (int r = minR; r <= maxR; ++r) {
                             for (int c = minC; c <= maxC; ++c) {
-                                if (c < 0 || c >= tm->width || r < 0 || r >= tm->height) continue;
                                 bool isBorder = (c == minC || c == maxC || r == minR || r == maxR);
                                 if (s_tilemapTool == TilemapTool::BoxFill || isBorder) {
-                                    int idx = r * tm->width + c;
-                                    targetLayer.tiles[idx] = s_brushTileId;
-                                    targetLayer.rotations[idx] = s_brushRotation;
-                                    tm->isDirty = true;
+                                    tm->setTile(s_tilemapActiveLayer, c, r, s_brushTileId, s_brushRotation);
                                 }
                             }
                         }
@@ -376,7 +335,6 @@ void EditorUI::handleViewportPicking() {
                 s_boxDragging = false;
                 auto* tm = registry.get<Engine::TilemapComponent>(paintTarget);
                 if (tm && s_tilemapActiveLayer >= 0 && s_tilemapActiveLayer < static_cast<int>(tm->layers.size())) {
-                    auto& targetLayer = tm->layers[s_tilemapActiveLayer];
                     int minC = std::min(s_boxStartCol, s_boxCurrentCol);
                     int maxC = std::max(s_boxStartCol, s_boxCurrentCol);
                     int minR = std::min(s_boxStartRow, s_boxCurrentRow);
@@ -384,13 +342,9 @@ void EditorUI::handleViewportPicking() {
 
                     for (int r = minR; r <= maxR; ++r) {
                         for (int c = minC; c <= maxC; ++c) {
-                            if (c < 0 || c >= tm->width || r < 0 || r >= tm->height) continue;
                             bool isBorder = (c == minC || c == maxC || r == minR || r == maxR);
                             if (s_tilemapTool == TilemapTool::BoxFill || isBorder) {
-                                int idx = r * tm->width + c;
-                                targetLayer.tiles[idx] = s_brushTileId;
-                                targetLayer.rotations[idx] = s_brushRotation;
-                                tm->isDirty = true;
+                                tm->setTile(s_tilemapActiveLayer, c, r, s_brushTileId, s_brushRotation);
                             }
                         }
                     }
@@ -741,20 +695,12 @@ void EditorUI::drawPhysgunDebugOverlay() {
 void EditorUI::drawTilemapGridOverlay() {
     if (!s_openTilesetEditorWindow && !s_brushModeActive) return;
 
-    if (hasSelection && registry.isValid(selectedEntity) && registry.has<Engine::TilemapComponent>(selectedEntity)) {
-        s_brushTilemapEntity = selectedEntity;
+    if (!hasSelection || !registry.isValid(selectedEntity) || !registry.has<Engine::TilemapComponent>(selectedEntity)) {
+        return;
     }
 
-    Entity targetEntity = s_brushTilemapEntity;
-    if (!registry.isValid(targetEntity) || !registry.has<Engine::TilemapComponent>(targetEntity)) {
-        for (auto [entity, tm] : registry.view<Engine::TilemapComponent>()) {
-            targetEntity = entity;
-            s_brushTilemapEntity = entity;
-            break;
-        }
-    }
-
-    if (!registry.isValid(targetEntity)) return;
+    Entity targetEntity = selectedEntity;
+    s_brushTilemapEntity = selectedEntity;
 
     auto* tm = registry.get<Engine::TilemapComponent>(targetEntity);
     auto* transform = registry.get<Transform>(targetEntity);
@@ -775,36 +721,49 @@ void EditorUI::drawTilemapGridOverlay() {
     ImDrawList* drawList = ImGui::GetBackgroundDrawList();
     glm::mat4 modelMatrix = transform->matrix();
 
-    float wSpace = tm->width * tm->tileSize;
-    float hSpace = tm->height * tm->tileSize;
+    int minX = 0, minY = 0, maxX = 0, maxY = 0;
+    tm->getBounds(minX, minY, maxX, maxY);
+    if (minX == 0 && minY == 0 && maxX == 0 && maxY == 0) {
+        minX = -16; minY = -16; maxX = 16; maxY = 16;
+    } else {
+        minX = std::min(minX - 4, -16);
+        minY = std::min(minY - 4, -16);
+        maxX = std::max(maxX + 4, 16);
+        maxY = std::max(maxY + 4, 16);
+    }
+
+    float minXWorld = minX * tm->tileSize;
+    float maxXWorld = (maxX + 1) * tm->tileSize;
+    float minYWorld = minY * tm->tileSize;
+    float maxYWorld = (maxY + 1) * tm->tileSize;
 
     ImU32 lineCol = ImColor(0, 191, 255, 120);
     ImU32 borderCol = ImColor(255, 215, 0, 220);
 
-    for (int c = 0; c <= tm->width; ++c) {
+    for (int c = minX; c <= maxX + 1; ++c) {
         float x = c * tm->tileSize;
-        glm::vec3 localStart(x, 0.0f, 0.0f);
-        glm::vec3 localEnd(x, hSpace, 0.0f);
+        glm::vec3 localStart(x, minYWorld, 0.0f);
+        glm::vec3 localEnd(x, maxYWorld, 0.0f);
         glm::vec3 worldStart(modelMatrix * glm::vec4(localStart, 1.0f));
         glm::vec3 worldEnd(modelMatrix * glm::vec4(localEnd, 1.0f));
 
         ImVec2 screenStart, screenEnd;
         if (projectToScreen(worldStart, screenStart) && projectToScreen(worldEnd, screenEnd)) {
-            bool isBorder = (c == 0 || c == tm->width);
+            bool isBorder = (c == minX || c == maxX + 1);
             drawList->AddLine(screenStart, screenEnd, isBorder ? borderCol : lineCol, isBorder ? 2.5f : 1.0f);
         }
     }
 
-    for (int r = 0; r <= tm->height; ++r) {
+    for (int r = minY; r <= maxY + 1; ++r) {
         float y = r * tm->tileSize;
-        glm::vec3 localStart(0.0f, y, 0.0f);
-        glm::vec3 localEnd(wSpace, y, 0.0f);
+        glm::vec3 localStart(minXWorld, y, 0.0f);
+        glm::vec3 localEnd(maxXWorld, y, 0.0f);
         glm::vec3 worldStart(modelMatrix * glm::vec4(localStart, 1.0f));
         glm::vec3 worldEnd(modelMatrix * glm::vec4(localEnd, 1.0f));
 
         ImVec2 screenStart, screenEnd;
         if (projectToScreen(worldStart, screenStart) && projectToScreen(worldEnd, screenEnd)) {
-            bool isBorder = (r == 0 || r == tm->height);
+            bool isBorder = (r == minY || r == maxY + 1);
             drawList->AddLine(screenStart, screenEnd, isBorder ? borderCol : lineCol, isBorder ? 2.5f : 1.0f);
         }
     }
@@ -841,25 +800,23 @@ void EditorUI::drawTilemapGridOverlay() {
                         int cellX = static_cast<int>(std::floor(hitLocal.x / tm->tileSize));
                         int cellY = static_cast<int>(std::floor(hitLocal.y / tm->tileSize));
 
-                        if (cellX >= 0 && cellX < tm->width && cellY >= 0 && cellY < tm->height) {
-                            float ts = tm->tileSize;
-                            glm::vec3 corners[4] = {
-                                glm::vec3(cellX * ts, cellY * ts, 0.001f),
-                                glm::vec3((cellX + 1) * ts, cellY * ts, 0.001f),
-                                glm::vec3((cellX + 1) * ts, (cellY + 1) * ts, 0.001f),
-                                glm::vec3(cellX * ts, (cellY + 1) * ts, 0.001f)
-                            };
+                        float ts = tm->tileSize;
+                        glm::vec3 corners[4] = {
+                            glm::vec3(cellX * ts, cellY * ts, 0.001f),
+                            glm::vec3((cellX + 1) * ts, cellY * ts, 0.001f),
+                            glm::vec3((cellX + 1) * ts, (cellY + 1) * ts, 0.001f),
+                            glm::vec3(cellX * ts, (cellY + 1) * ts, 0.001f)
+                        };
 
-                            ImVec2 sc[4];
-                            bool allValid = true;
-                            for (int i = 0; i < 4; ++i) {
-                                allValid &= projectToScreen(glm::vec3(modelMatrix * glm::vec4(corners[i], 1.0f)), sc[i]);
-                            }
+                        ImVec2 sc[4];
+                        bool allValid = true;
+                        for (int i = 0; i < 4; ++i) {
+                            allValid &= projectToScreen(glm::vec3(modelMatrix * glm::vec4(corners[i], 1.0f)), sc[i]);
+                        }
 
-                            if (allValid) {
-                                drawList->AddQuad(sc[0], sc[1], sc[2], sc[3], ImColor(255, 255, 255, 255), 2.0f);
-                                drawList->AddQuadFilled(sc[0], sc[1], sc[2], sc[3], ImColor(255, 255, 255, 40));
-                            }
+                        if (allValid) {
+                            drawList->AddQuad(sc[0], sc[1], sc[2], sc[3], ImColor(255, 255, 255, 255), 2.0f);
+                            drawList->AddQuadFilled(sc[0], sc[1], sc[2], sc[3], ImColor(255, 255, 255, 40));
                         }
                     }
                 }

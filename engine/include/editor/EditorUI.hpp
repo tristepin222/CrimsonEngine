@@ -60,6 +60,15 @@ class VulkanRenderer;
  */
 class EditorUI {
 public:
+    /**
+     * @struct SpritesheetAnimConfig
+     * @brief Configuration for a single animation clip extracted from a spritesheet.
+     */
+    struct SpritesheetAnimConfig {
+        std::string name = "Animation";
+        int frameCount = 4;
+        int startFrameIndex = 0;
+    };
     using BuildGameCallback = std::function<int(const std::string& projectPath, const std::string& outPath)>;
     using CompileScriptsCallback = std::function<int(const std::string& projectPath)>;
 
@@ -167,8 +176,26 @@ private:
     void drawSpriteSlicerWindow();
     /**
      * @brief Slices a sprite sheet texture into multiple separate PNG texture files.
+     * @return List of output file paths generated.
      */
-    void sliceSpriteSheet(const std::filesystem::path& path, int cellWidth, int cellHeight, const std::string& prefix, bool skipEmptyTiles = true);
+    std::vector<std::filesystem::path> sliceSpriteSheet(const std::filesystem::path& path, int cellWidth, int cellHeight, const std::string& prefix, bool skipEmptyTiles = true);
+
+    /**
+     * @brief Renders the Spritesheet to Animations converter window.
+     */
+    void drawSpritesheetConverterWindow();
+
+    /**
+     * @brief Converts a spritesheet texture into .anim files targeting SpriteRenderer.
+     */
+    void convertSpritesheetToAnimations(
+        const std::filesystem::path& spritesheetPath,
+        int cellWidth,
+        int cellHeight,
+        float frameRate,
+        const std::vector<SpritesheetAnimConfig>& animConfigs,
+        bool combineIntoSingleFile
+    );
 
     /**
      * @brief Renders the Tilemap component inspector panel.

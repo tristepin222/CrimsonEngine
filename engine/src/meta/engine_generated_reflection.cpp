@@ -536,12 +536,21 @@ PLUGIN_API void registerEngineReflection() {
     }
 }
 
+static std::vector<std::shared_ptr<System>> s_pluginSystems;
+
 PLUGIN_API void initPlugin(PluginContext* context) {
     if (context && context->imguiContext) ImGui::SetCurrentContext(context->imguiContext);
     registerEngineReflection();
 
+    s_pluginSystems.clear();
+
 }
 
 PLUGIN_API void shutdownPlugin(PluginContext* context) {
-    // Cleanup logic
+    if (context && context->systemManager) {
+        for (auto& sysPtr : s_pluginSystems) {
+            context->systemManager->removeSystem(sysPtr);
+        }
+    }
+    s_pluginSystems.clear();
 }

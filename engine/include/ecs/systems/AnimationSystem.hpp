@@ -95,7 +95,7 @@ public:
                 auto* animator = registry.get<AnimatorComponent>(entity);
                 if (controller && animator) {
                     float entityDt = (editorMode.isPlaying || animator->isPreviewing || animator->playbackSpeed > 0.0f) ? dt : 0.0f;
-                    updateController(*controller, *animator, entityDt);
+                    updateController(entity, *controller, *animator, entityDt);
                 }
             });
 
@@ -117,13 +117,10 @@ public:
                 }
             });
 
-            // 3. Third Pass: Process generic property-only animations for entities without skeletons (Main Thread)
+            // 3. Third Pass: Process generic property-only animations for all entities (Main Thread)
             for (auto [entity, animator] : registry.view<AnimatorComponent>()) {
-                auto* skeleton = registry.get<SkeletonComponent>(entity);
-                if (!skeleton || skeleton->joints.empty()) {
-                    float entityDt = (editorMode.isPlaying || animator.isPreviewing || animator.playbackSpeed > 0.0f) ? dt : 0.0f;
-                    updateGenericAnimation(entity, animator, entityDt);
-                }
+                float entityDt = (editorMode.isPlaying || animator.isPreviewing || animator.playbackSpeed > 0.0f) ? dt : 0.0f;
+                updateGenericAnimation(entity, animator, entityDt);
             }
         }
 
@@ -131,9 +128,138 @@ public:
         /**
          * @brief Updates high-level state machine progression and checks transitions.
          */
-        void updateController(AnimationControllerComponent& controller, AnimatorComponent& animator, float dt) {
-            if ((controller.currentState.empty() || controller.currentState == "Entry" || controller.currentState == "__Entry__") && !controller.states.empty()) {
-                controller.currentState = controller.states[0].name;
+        void updateController(Entity entity, AnimationControllerComponent& controller, AnimatorComponent& animator, float dt) {
+            auto isPseudoNode = [](const std::string& name) {
+                std::string lower = name;
+                for (char& c : lower) c = (char)std::tolower((unsigned char)c);
+                return (lower == "entry" || lower == "__entry__" || lower == "start" || lower == "any state" || lower == "anystate");
+            };
+
+            auto getParamVal = [&](const std::string& name, float defaultVal = 0.0f) -> float {
+                if (controller.parameters.empty()) return defaultVal;
+                if (!name.empty() && name != "(select param)") {
+                    auto it = controller.parameters.find(name);
+                    if (it != controller.parameters.end()) return it->second;
+
+                    // Case-insensitive and space-stripping match
+                    std::string cleanName = name;
+                    cleanName.erase(std::remove_if(cleanName.begin(), cleanName.end(), ::isspace), cleanName.end());
+                    for (char& c : cleanName) c = (char)std::tolower((unsigned char)c);
+
+                    for (const auto& [pKey, pVal] : controller.parameters) {
+                        std::string cleanKey = pKey;
+                        cleanKey.erase(std::remove_if(cleanKey.begin(), cleanKey.end(), ::isspace), cleanKey.end());
+                        for (char& c : cleanKey) c = (char)std::tolower((unsigned char)c);
+                        if (cleanKey == cleanName) return pVal;
+                    }
+                }
+                return defaultVal;
+            };
+
+            auto loadClipOnDemand = [&](const std::string& clipName) {
+                if (clipName.empty()) return;
+                for (const auto& cl : animator.animations) {
+                    if (cl.name == clipName || std::filesystem::path(cl.name).stem().string() == clipName) return;
+                }
+
+                std::string foundPath = "";
+                std::vector<std::string> searchDirs = { "", "assets/", "assets/animations/", "assets/sprites/", "assets/textures/", "sandbox_game/assets/", "sandbox_game/assets/animations/", "sandbox_game/assets/sprites/" };
+                std::vector<std::string> searchExts = { "", ".anim", ".fbx", ".gltf", ".glb", ".png", ".jpg" };
+
+                for (const auto& dir : searchDirs) {
+                    for (const auto& ext : searchExts) {
+                        std::string cand = dir + clipName + ext;
+                        if (std::filesystem::exists(cand)) {
+                            foundPath = cand;
+                            break;
+                        }
+                    }
+                    if (!foundPath.empty()) break;
+                }
+
+                if (foundPath.empty()) {
+                    std::vector<std::string> rootDirs = { "assets", "sandbox_game/assets" };
+                    std::string targetStem = std::filesystem::path(clipName).stem().string();
+                    for (char& c : targetStem) c = (char)std::tolower((unsigned char)c);
+
+                    for (const auto& rDir : rootDirs) {
+                        try {
+                            if (std::filesystem::exists(rDir)) {
+                                for (const auto& entry : std::filesystem::recursive_directory_iterator(rDir)) {
+                                    if (entry.is_regular_file()) {
+                                        std::string entryStem = entry.path().stem().string();
+                                        for (char& c : entryStem) c = (char)std::tolower((unsigned char)c);
+
+                                        if (entryStem == targetStem) {
+                                            foundPath = entry.path().generic_string();
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        } catch (...) {}
+                        if (!foundPath.empty()) break;
+                    }
+                }
+
+                if (!foundPath.empty()) {
+                    std::string ext = std::filesystem::path(foundPath).extension().string();
+                    for (char& c : ext) c = (char)std::tolower((unsigned char)c);
+
+                    if (ext == ".anim" || ext == ".fbx" || ext == ".gltf" || ext == ".glb") {
+                        SkeletonComponent* skel = registry.get<SkeletonComponent>(entity);
+                        SkeletonComponent dummySkel;
+                        renderer.resourceManager->loadBinarySkeletonAndAnimations(foundPath, skel ? *skel : dummySkel, animator, true);
+                    } else if (ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".tga" || ext == ".bmp") {
+                        AnimationClip texClip;
+                        texClip.name = clipName;
+                        texClip.duration = 1.0f;
+                        PropertyChannel pChan;
+                        pChan.componentName = "SpriteRenderer";
+                        pChan.fieldName = "texturePath";
+                        PropertyKeyframe pKey;
+                        pKey.time = 0.0f;
+                        pKey.stringValue = foundPath;
+                        pChan.keys.push_back(pKey);
+                        texClip.propertyChannels.push_back(pChan);
+                        animator.animations.push_back(texClip);
+                    }
+                }
+            };
+
+            // Pre-load all motion clips for all states in controller
+            for (const auto& st : controller.states) {
+                if (st.isBlendTree) {
+                    for (const auto& bn : st.blendTree.nodes) {
+                        loadClipOnDemand(bn.clipName);
+                    }
+                } else {
+                    loadClipOnDemand(st.clipName);
+                }
+            }
+
+            if ((controller.currentState.empty() || isPseudoNode(controller.currentState)) && !controller.states.empty()) {
+                // First check if there is an outgoing transition from Entry/Start
+                std::string targetStateName = "";
+                for (const auto& trans : controller.transitions) {
+                    if (isPseudoNode(trans.fromState) && !trans.toState.empty() && !isPseudoNode(trans.toState)) {
+                        targetStateName = trans.toState;
+                        break;
+                    }
+                }
+                // Fallback: pick first real state that is not a pseudo node
+                if (targetStateName.empty()) {
+                    for (const auto& st : controller.states) {
+                        if (!isPseudoNode(st.name)) {
+                            targetStateName = st.name;
+                            break;
+                        }
+                    }
+                }
+                if (targetStateName.empty() && !controller.states.empty()) {
+                    targetStateName = controller.states[0].name;
+                }
+                controller.currentState = targetStateName;
                 controller.currentStateTime = 0.0f;
             }
 
@@ -147,16 +273,58 @@ public:
                     break;
                 }
             }
+            if (!currState && !controller.currentState.empty()) {
+                std::string cleanCurr = controller.currentState;
+                cleanCurr.erase(std::remove_if(cleanCurr.begin(), cleanCurr.end(), ::isspace), cleanCurr.end());
+                for (char& c : cleanCurr) c = (char)std::tolower((unsigned char)c);
+                for (const auto& state : controller.states) {
+                    std::string cleanSt = state.name;
+                    cleanSt.erase(std::remove_if(cleanSt.begin(), cleanSt.end(), ::isspace), cleanSt.end());
+                    for (char& c : cleanSt) c = (char)std::tolower((unsigned char)c);
+                    if (cleanSt == cleanCurr) {
+                        currState = &state;
+                        break;
+                    }
+                }
+            }
+            if (!currState && !controller.states.empty()) {
+                for (const auto& state : controller.states) {
+                    if (!isPseudoNode(state.name)) {
+                        currState = &state;
+                        controller.currentState = state.name;
+                        break;
+                    }
+                }
+            }
 
             if (currState) {
                 controller.currentStateTime += dt * currState->speed;
+
+                static float s_debugTimer = 0.0f;
+                s_debugTimer += dt;
+                bool doLog = false;
+                if (s_debugTimer >= 1.0f) {
+                    s_debugTimer = 0.0f;
+                    doLog = true;
+                }
+
+                if (doLog) {
+                    std::cout << "[AnimDebug] Entity state: '" << controller.currentState 
+                              << "' | stateTime: " << controller.currentStateTime 
+                              << " | isBlendTree: " << (currState->isBlendTree ? "YES" : "NO")
+                              << " | dt: " << dt 
+                              << " | isPlaying: " << (editorMode.isPlaying ? 1 : 0)
+                              << " | isPreviewing: " << (animator.isPreviewing ? 1 : 0)
+                              << std::endl;
+                }
 
                 // Sync active clip & time in AnimatorComponent from current state
                 if (!currState->isBlendTree) {
                     int clipIdx = -1;
                     if (!currState->clipName.empty()) {
                         for (size_t i = 0; i < animator.animations.size(); ++i) {
-                            if (animator.animations[i].name == currState->clipName) {
+                            if (animator.animations[i].name == currState->clipName ||
+                                std::filesystem::path(animator.animations[i].name).stem().string() == currState->clipName) {
                                 clipIdx = static_cast<int>(i);
                                 break;
                             }
@@ -185,6 +353,269 @@ public:
                         }
                         animator.loop = currState->isLooping;
                     }
+                } else {
+                    // For Blend Trees: determine dominant motion clip for property-based / 2D sprite animators
+                    BlendTree treeCopy = currState->blendTree;
+                    if (treeCopy.nodes.empty()) {
+                        if (doLog) {
+                            std::cout << "[BlendTreeDebug] WARNING: BlendTree state '" << currState->name 
+                                      << "' has 0 nodes in blendTree.nodes! Auto-populating from animator.animations (" << animator.animations.size() << " clips)..." << std::endl;
+                        }
+                        for (const auto& clip : animator.animations) {
+                            if (!clip.name.empty()) {
+                                BlendNode bn;
+                                bn.clipName = clip.name;
+                                treeCopy.nodes.push_back(bn);
+                            }
+                        }
+                    }
+                    const auto& tree = treeCopy;
+                    if (!tree.nodes.empty()) {
+                        std::string dominantClipName;
+
+                        std::string paramXName = tree.parameterName;
+                        std::string paramYName = tree.parameterYName;
+
+                        // Smart fallback for parameter names if unassigned
+                        if (paramXName.empty() || paramXName == "(select param)") {
+                            for (const auto& [pk, pv] : controller.parameters) {
+                                std::string lk = pk; for (char& c : lk) c = (char)std::tolower((unsigned char)c);
+                                if (lk.find("x") != std::string::npos || lk.find("horiz") != std::string::npos) {
+                                    paramXName = pk; break;
+                                }
+                            }
+                            if ((paramXName.empty() || paramXName == "(select param)") && !controller.parameters.empty()) {
+                                paramXName = controller.parameters.begin()->first;
+                            }
+                        }
+
+                        if (paramYName.empty() || paramYName == "(select param)") {
+                            for (const auto& [pk, pv] : controller.parameters) {
+                                std::string lk = pk; for (char& c : lk) c = (char)std::tolower((unsigned char)c);
+                                if (lk.find("y") != std::string::npos || lk.find("vert") != std::string::npos) {
+                                    paramYName = pk; break;
+                                }
+                            }
+                            if ((paramYName.empty() || paramYName == "(select param)") && controller.parameters.size() >= 2) {
+                                auto it = controller.parameters.begin();
+                                std::advance(it, 1);
+                                paramYName = it->first;
+                            }
+                        }
+
+                        size_t bestIdx = 0;
+
+                        if (tree.is2D) {
+                            float px = getParamVal(paramXName, 0.0f);
+                            float py = getParamVal(paramYName, 0.0f);
+                            glm::vec2 p(px, py);
+
+                            // Check if all node thresholds are zero
+                            bool allZero = true;
+                            for (const auto& bn : tree.nodes) {
+                                if (glm::length(bn.threshold2D) > 0.001f) {
+                                    allZero = false;
+                                    break;
+                                }
+                            }
+
+                            float minDistSq = 1e30f;
+                            for (size_t i = 0; i < tree.nodes.size(); ++i) {
+                                glm::vec2 thresh = tree.nodes[i].threshold2D;
+                                std::string cLower = tree.nodes[i].clipName;
+                                for (char& c : cLower) c = (char)std::tolower((unsigned char)c);
+
+                                if (glm::length(thresh) <= 0.001f) {
+                                    if (cLower.find("down") != std::string::npos || cLower.find("south") != std::string::npos) {
+                                        thresh = glm::vec2(0.0f, -1.0f);
+                                    } else if (cLower.find("up") != std::string::npos || cLower.find("north") != std::string::npos) {
+                                        thresh = glm::vec2(0.0f, 1.0f);
+                                    } else if (cLower.find("left") != std::string::npos || cLower.find("west") != std::string::npos) {
+                                        thresh = glm::vec2(-1.0f, 0.0f);
+                                    } else if (cLower.find("right") != std::string::npos || cLower.find("east") != std::string::npos) {
+                                        thresh = glm::vec2(1.0f, 0.0f);
+                                    } else if (cLower.find("idle") != std::string::npos || cLower.find("stand") != std::string::npos) {
+                                        thresh = glm::vec2(0.0f, 0.0f);
+                                    } else if (allZero && tree.nodes.size() == 5) {
+                                        // Standard 5-point 2D blend tree fallback: Idle, Down, Up, Left, Right
+                                        static const glm::vec2 defaults[5] = {
+                                            glm::vec2(0.0f, 0.0f),  // Node 0: Idle
+                                            glm::vec2(0.0f, -1.0f), // Node 1: Down
+                                            glm::vec2(0.0f, 1.0f),  // Node 2: Up
+                                            glm::vec2(-1.0f, 0.0f), // Node 3: Left
+                                            glm::vec2(1.0f, 0.0f)   // Node 4: Right
+                                        };
+                                        if (i < 5) thresh = defaults[i];
+                                    }
+                                }
+
+                                glm::vec2 diff = p - thresh;
+                                float dSq = glm::dot(diff, diff);
+                                if (dSq < minDistSq) {
+                                    minDistSq = dSq;
+                                    bestIdx = i;
+                                }
+                            }
+                            dominantClipName = tree.nodes[bestIdx].clipName;
+                        } else {
+                            float pVal = getParamVal(paramXName, 0.0f);
+                            float minDiff = 1e30f;
+                            for (size_t i = 0; i < tree.nodes.size(); ++i) {
+                                float diff = std::abs(pVal - tree.nodes[i].threshold);
+                                if (diff < minDiff) {
+                                    minDiff = diff;
+                                    bestIdx = i;
+                                }
+                            }
+                            dominantClipName = tree.nodes[bestIdx].clipName;
+                        }
+
+                        if (dominantClipName.empty() && !animator.animations.empty()) {
+                            dominantClipName = animator.animations[bestIdx % animator.animations.size()].name;
+                        }
+
+                        if (doLog) {
+                            std::string loadedList = "";
+                            for (size_t i = 0; i < animator.animations.size(); ++i) {
+                                if (i > 0) loadedList += ", ";
+                                loadedList += "'" + animator.animations[i].name + "'";
+                            }
+                            std::cout << "[BlendTreeDebug] state: '" << currState->name
+                                      << "' | is2D: " << (tree.is2D ? "YES" : "NO")
+                                      << " | paramX: '" << paramXName << "' (" << getParamVal(paramXName, 0.0f) << ")"
+                                      << " | paramY: '" << paramYName << "' (" << getParamVal(paramYName, 0.0f) << ")"
+                                      << " | bestIdx: " << bestIdx
+                                      << " | dominantClip: '" << dominantClipName << "'"
+                                      << " | loadedClips: [" << loadedList << "]"
+                                      << std::endl;
+                        }
+
+                        if (!dominantClipName.empty()) {
+                            int clipIdx = -1;
+                            for (size_t i = 0; i < animator.animations.size(); ++i) {
+                                std::string aStem = std::filesystem::path(animator.animations[i].name).stem().string();
+                                std::string dStem = std::filesystem::path(dominantClipName).stem().string();
+                                for (char& c : aStem) c = (char)std::tolower((unsigned char)c);
+                                for (char& c : dStem) c = (char)std::tolower((unsigned char)c);
+
+                                if (animator.animations[i].name == dominantClipName || aStem == dStem ||
+                                    aStem.find(dStem) != std::string::npos || dStem.find(aStem) != std::string::npos) {
+                                    clipIdx = static_cast<int>(i);
+                                    break;
+                                }
+                            }
+                            if (clipIdx == -1 && !dominantClipName.empty()) {
+                                std::string foundPath = "";
+                                std::vector<std::string> cands = {
+                                    dominantClipName, dominantClipName + ".anim",
+                                    "assets/" + dominantClipName, "assets/" + dominantClipName + ".anim",
+                                    "assets/animations/" + dominantClipName, "assets/animations/" + dominantClipName + ".anim",
+                                    "assets/sprites/" + dominantClipName, "assets/sprites/" + dominantClipName + ".anim",
+                                    "assets/textures/" + dominantClipName, "assets/textures/" + dominantClipName + ".anim"
+                                };
+                                for (const auto& cand : cands) {
+                                    if (std::filesystem::exists(cand)) {
+                                        foundPath = cand;
+                                        break;
+                                    }
+                                }
+
+                                if (foundPath.empty()) {
+                                    try {
+                                        if (std::filesystem::exists("assets")) {
+                                            std::string targetStem = std::filesystem::path(dominantClipName).stem().string();
+                                            for (char& c : targetStem) c = (char)std::tolower((unsigned char)c);
+
+                                            for (const auto& entry : std::filesystem::recursive_directory_iterator("assets")) {
+                                                if (entry.is_regular_file()) {
+                                                    std::string entryStem = entry.path().stem().string();
+                                                    for (char& c : entryStem) c = (char)std::tolower((unsigned char)c);
+
+                                                    if (entryStem == targetStem) {
+                                                        foundPath = entry.path().generic_string();
+                                                        break;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    } catch (...) {}
+                                }
+
+                                if (!foundPath.empty()) {
+                                    std::string ext = std::filesystem::path(foundPath).extension().string();
+                                    for (char& c : ext) c = (char)std::tolower((unsigned char)c);
+
+                                    if (ext == ".anim" || ext == ".fbx" || ext == ".gltf" || ext == ".glb") {
+                                        SkeletonComponent* skel = registry.get<SkeletonComponent>(entity);
+                                        SkeletonComponent dummySkel;
+                                        renderer.resourceManager->loadBinarySkeletonAndAnimations(foundPath, skel ? *skel : dummySkel, animator, true);
+                                    } else if (ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".tga" || ext == ".bmp") {
+                                        AnimationClip texClip;
+                                        texClip.name = dominantClipName;
+                                        texClip.duration = 1.0f;
+                                        PropertyChannel pChan;
+                                        pChan.componentName = "SpriteRenderer";
+                                        pChan.fieldName = "texturePath";
+                                        PropertyKeyframe pKey;
+                                        pKey.time = 0.0f;
+                                        pKey.stringValue = foundPath;
+                                        pChan.keys.push_back(pKey);
+                                        texClip.propertyChannels.push_back(pChan);
+                                        animator.animations.push_back(texClip);
+                                    }
+                                }
+
+                                for (size_t i = 0; i < animator.animations.size(); ++i) {
+                                    std::string aStem = std::filesystem::path(animator.animations[i].name).stem().string();
+                                    std::string dStem = std::filesystem::path(dominantClipName).stem().string();
+                                    for (char& c : aStem) c = (char)std::tolower((unsigned char)c);
+                                    for (char& c : dStem) c = (char)std::tolower((unsigned char)c);
+
+                                    if (animator.animations[i].name == dominantClipName || aStem == dStem ||
+                                        aStem.find(dStem) != std::string::npos || dStem.find(aStem) != std::string::npos) {
+                                        clipIdx = static_cast<int>(i);
+                                        break;
+                                    }
+                                }
+                            }
+                            if (clipIdx == -1 && !animator.animations.empty()) {
+                                clipIdx = 0;
+                            }
+                            if (clipIdx != -1) {
+                                animator.activeAnimationIndex = clipIdx;
+                                auto& clip = animator.animations[clipIdx];
+                                float effectiveDur = clip.duration;
+                                for (const auto& chan : clip.propertyChannels) {
+                                    if (!chan.keys.empty()) {
+                                        effectiveDur = std::max(effectiveDur, chan.keys.back().time);
+                                    }
+                                }
+                                for (const auto& chan : clip.channels) {
+                                    if (!chan.translationKeys.empty()) effectiveDur = std::max(effectiveDur, chan.translationKeys.back().time);
+                                    if (!chan.rotationKeys.empty()) effectiveDur = std::max(effectiveDur, chan.rotationKeys.back().time);
+                                    if (!chan.scaleKeys.empty()) effectiveDur = std::max(effectiveDur, chan.scaleKeys.back().time);
+                                }
+                                if (effectiveDur <= 0.0f) effectiveDur = 1.0f;
+                                clip.duration = effectiveDur;
+
+                                if (currState->isLooping) {
+                                    animator.currentTime = std::fmod(controller.currentStateTime, effectiveDur);
+                                } else {
+                                    animator.currentTime = std::min(controller.currentStateTime, effectiveDur);
+                                }
+                                if (doLog) {
+                                    std::cout << "[BlendTreeDebug] is2D: " << (tree.is2D ? "YES" : "NO")
+                                              << " | paramX: '" << tree.parameterName << "'"
+                                              << " | paramY: '" << tree.parameterYName << "'"
+                                              << " | dominantClip: '" << dominantClipName << "'"
+                                              << " | clipIdx: " << clipIdx
+                                              << " | animTime: " << animator.currentTime
+                                              << " | loadedAnims: " << animator.animations.size()
+                                              << std::endl;
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
@@ -211,14 +642,13 @@ public:
             // Check transition rules (only if not currently crossfading)
             if (!controller.isCrossfading) {
                 for (const auto& trans : controller.transitions) {
-                    if (trans.fromState == controller.currentState) {
+                    bool isAnyStateTrans = (trans.fromState == "Any State" || trans.fromState == "any state" || trans.fromState == "AnyState");
+                    if (isAnyStateTrans && trans.conditions.empty()) continue;
+
+                    if ((trans.fromState == controller.currentState || isAnyStateTrans) && trans.toState != controller.currentState) {
                         bool allConditionsMet = true;
                         for (const auto& cond : trans.conditions) {
-                            float paramVal = 0.0f;
-                            auto it = controller.parameters.find(cond.parameterName);
-                            if (it != controller.parameters.end()) {
-                                paramVal = it->second;
-                            }
+                            float paramVal = getParamVal(cond.parameterName, 0.0f);
 
                             if (cond.op == ">") {
                                 if (!(paramVal > cond.value)) allConditionsMet = false;
@@ -268,8 +698,24 @@ public:
         }
 
         const AnimationClip* findClip(const AnimatorComponent& animator, const std::string& name) {
+            if (name.empty()) return nullptr;
             for (const auto& clip : animator.animations) {
                 if (clip.name == name) return &clip;
+            }
+            // Stem or case-insensitive fallback
+            for (const auto& clip : animator.animations) {
+                std::filesystem::path p(clip.name);
+                if (p.stem().string() == name) return &clip;
+            }
+            // Case insensitive exact or stem match
+            std::string lowerName = name;
+            for (char& c : lowerName) c = (char)std::tolower((unsigned char)c);
+            for (const auto& clip : animator.animations) {
+                std::string lowerClip = clip.name;
+                for (char& c : lowerClip) c = (char)std::tolower((unsigned char)c);
+                if (lowerClip == lowerName) return &clip;
+                std::filesystem::path p(lowerClip);
+                if (p.stem().string() == lowerName) return &clip;
             }
             return nullptr;
         }
@@ -345,6 +791,22 @@ public:
 
                         weights[i] = std::max(0.0f, minVal);
                         totalWeight += weights[i];
+                    }
+
+                    // Fallback to nearest neighbor node if totalWeight is zero (e.g. all nodes coincide or param outside gradient)
+                    if (totalWeight <= 1e-5f && numNodes > 0) {
+                        size_t nearestIdx = 0;
+                        float minDistSq = 1e30f;
+                        for (size_t i = 0; i < numNodes; ++i) {
+                            glm::vec2 diff = p - tree.nodes[i].threshold2D;
+                            float dSq = glm::dot(diff, diff);
+                            if (dSq < minDistSq) {
+                                minDistSq = dSq;
+                                nearestIdx = i;
+                            }
+                        }
+                        weights[nearestIdx] = 1.0f;
+                        totalWeight = 1.0f;
                     }
 
                     // Normalize weights and sample/blend poses
@@ -905,33 +1367,66 @@ public:
 
         glm::vec4 interpolateProperty(const std::vector<PropertyKeyframe>& keys, float time, const glm::vec4& defaultValue) {
             if (keys.empty()) return defaultValue;
-            if (keys.size() == 1 || time <= keys.front().time) return keys.front().value;
-            if (time >= keys.back().time) return keys.back().value;
+            if (keys.size() == 1) return keys.front().value;
+
+            std::vector<PropertyKeyframe> spacedKeys;
+            const std::vector<PropertyKeyframe>* effectiveKeys = &keys;
+
+            if (keys.back().time <= keys.front().time + 0.001f) {
+                spacedKeys = keys;
+                for (size_t i = 0; i < spacedKeys.size(); ++i) {
+                    spacedKeys[i].time = static_cast<float>(i) * 0.1f;
+                }
+                effectiveKeys = &spacedKeys;
+                float dur = spacedKeys.back().time + 0.1f;
+                time = std::fmod(time, dur);
+            }
+
+            const auto& kList = *effectiveKeys;
+            if (time <= kList.front().time) return kList.front().value;
+            if (time >= kList.back().time) return kList.back().value;
 
             size_t index = 0;
-            for (size_t i = 0; i < keys.size() - 1; ++i) {
-                if (time >= keys[i].time && time <= keys[i+1].time) {
+            for (size_t i = 0; i < kList.size() - 1; ++i) {
+                if (time >= kList[i].time && time <= kList[i+1].time) {
                     index = i;
                     break;
                 }
             }
 
-            const auto& k1 = keys[index];
-            const auto& k2 = keys[index+1];
-            float factor = (time - k1.time) / (k2.time - k1.time);
+            const auto& k1 = kList[index];
+            const auto& k2 = kList[index+1];
+            float interval = k2.time - k1.time;
+            float factor = (interval > 0.0001f) ? (time - k1.time) / interval : 0.0f;
             return glm::mix(k1.value, k2.value, factor);
         }
 
         std::string sampleStringProperty(const std::vector<PropertyKeyframe>& keys, float time) {
             if (keys.empty()) return "";
-            if (time <= keys.front().time) return keys.front().stringValue;
-            if (time >= keys.back().time) return keys.back().stringValue;
-            for (size_t i = 0; i < keys.size() - 1; ++i) {
-                if (time >= keys[i].time && time < keys[i + 1].time) {
-                    return keys[i].stringValue;
+            if (keys.size() == 1) return keys.front().stringValue;
+
+            std::vector<PropertyKeyframe> spacedKeys;
+            const std::vector<PropertyKeyframe>* effectiveKeys = &keys;
+
+            if (keys.back().time <= keys.front().time + 0.001f) {
+                spacedKeys = keys;
+                for (size_t i = 0; i < spacedKeys.size(); ++i) {
+                    spacedKeys[i].time = static_cast<float>(i) * 0.1f;
+                }
+                effectiveKeys = &spacedKeys;
+                float dur = spacedKeys.back().time + 0.1f;
+                time = std::fmod(time, dur);
+            }
+
+            const auto& kList = *effectiveKeys;
+            if (time <= kList.front().time) return kList.front().stringValue;
+            if (time >= kList.back().time) return kList.back().stringValue;
+            for (size_t i = 0; i < kList.size() - 1; ++i) {
+                if (time >= kList[i].time && time < kList[i + 1].time) {
+                    return kList[i].stringValue;
                 }
             }
-            return keys.back().stringValue;
+            return kList.back().stringValue;
         }
 
         void sampleAndApplyProperties(Entity entity, AnimatorComponent& animator) {

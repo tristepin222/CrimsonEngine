@@ -253,8 +253,10 @@ int main(int argc, char* argv[]) {
     out << "    #define PLUGIN_API extern \"C\"\n";
     out << "#endif\n\n";
 
-        // Generate component reflection registration function
-    out << "PLUGIN_API void registerEngineReflection() {\n";
+    std::string funcName = systems.empty() ? "registerEngineReflection" : "registerScriptReflection";
+
+    // Generate component reflection registration function
+    out << "PLUGIN_API void " << funcName << "() {\n";
     for (const auto& comp : components) {
         std::string compName = comp.name;
         if (compName.size() > 9 && compName.rfind("Component") == compName.size() - 9) {
@@ -303,23 +305,32 @@ int main(int argc, char* argv[]) {
     }
     out << "}\n\n";
 
+    out << "static std::vector<std::shared_ptr<System>> s_pluginSystems;\n\n";
+
     out << "PLUGIN_API void initPlugin(PluginContext* context) {\n";
     out << "    if (context && context->imguiContext) ImGui::SetCurrentContext(context->imguiContext);\n";
-    out << "    registerEngineReflection();\n\n";
-
+    out << "    " << funcName << "();\n\n";
+    out << "    s_pluginSystems.clear();\n\n";
 
     // Register reflected systems
     for (const auto& sys : systems) {
         out << "    // Register " << sys.name << "\n";
         out << "    {\n";
-        out << "        context->systemManager->addSystem(std::make_shared<" << sys.name << ">(*context->registry, *context->renderer, *context->editorMode));\n";
+        out << "        auto sysPtr = std::make_shared<" << sys.name << ">(*context->registry, *context->renderer, *context->editorMode);\n";
+        out << "        s_pluginSystems.push_back(sysPtr);\n";
+        out << "        context->systemManager->addSystem(sysPtr);\n";
         out << "    }\n\n";
     }
 
     out << "}\n\n";
 
     out << "PLUGIN_API void shutdownPlugin(PluginContext* context) {\n";
-    out << "    // Cleanup logic\n";
+    out << "    if (context && context->systemManager) {\n";
+    out << "        for (auto& sysPtr : s_pluginSystems) {\n";
+    out << "            context->systemManager->removeSystem(sysPtr);\n";
+    out << "        }\n";
+    out << "    }\n";
+    out << "    s_pluginSystems.clear();\n";
     out << "}\n";
 
     std::cout << "[Reflection Generator] Successfully generated: " << outputFile << " (" 

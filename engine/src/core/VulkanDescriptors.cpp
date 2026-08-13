@@ -187,6 +187,10 @@ void VulkanDescriptors::updateTextureDescriptorSet(
     VkImageView normalView, VkSampler normalSampler,
     VkImageView metallicView, VkSampler metallicSampler
 ) {
+    if (device != VK_NULL_HANDLE) {
+        vkDeviceWaitIdle(device);
+    }
+
     VkDescriptorImageInfo imageInfos[3]{};
     imageInfos[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     imageInfos[0].imageView = diffuseView;
@@ -234,6 +238,10 @@ void VulkanDescriptors::updateSingleTextureDescriptorSet(
     VkDescriptorSet descriptorSet,
     VkImageView view, VkSampler sampler
 ) {
+    if (device != VK_NULL_HANDLE) {
+        vkDeviceWaitIdle(device);
+    }
+
     VkDescriptorImageInfo imageInfo{};
     imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     imageInfo.imageView = view;

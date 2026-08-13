@@ -7,11 +7,6 @@ namespace Engine {
 
     ComponentReflectionRegistry& ComponentReflectionRegistry::getInstance() {
         static ComponentReflectionRegistry instance;
-        static bool initialized = false;
-        if (!initialized) {
-            initialized = true;
-            registerEngineReflection();
-        }
         return instance;
     }
 

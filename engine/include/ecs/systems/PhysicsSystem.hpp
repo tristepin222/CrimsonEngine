@@ -5,6 +5,7 @@
 #include "ecs/components/RigidBody.hpp"
 #include "ecs/components/Collider.hpp"
 #include "ecs/components/Hierarchy.hpp"
+#include "ecs/components/Tilemap.hpp"
 #include "editor/EditorModeState.hpp"
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -182,6 +183,72 @@ namespace Engine {
                                 colInfo,
                                 solverDt
                             );
+                        }
+                    }
+                }
+            }
+
+            // 2b. Direct O(1) Tilemap Grid Collision Pass (Zero Physics Entities)
+            for (auto [actorEnt, trans, col] : registry.view<Transform, ColliderComponent>()) {
+                auto* rb = registry.get<RigidBodyComponent>(actorEnt);
+                if (rb && rb->type == RigidBodyType::Static) continue;
+
+                glm::vec3 actorPos = trans.position + col.offset;
+                glm::vec3 actorExtents = col.extents;
+                if (col.shape == ColliderShape::Sphere) actorExtents = glm::vec3(col.radius);
+
+                for (auto [tmEnt, tm] : registry.view<TilemapComponent>()) {
+                    auto* tmTrans = registry.get<Transform>(tmEnt);
+                    glm::mat4 tmModel = tmTrans ? tmTrans->matrix() : glm::mat4(1.0f);
+                    glm::mat4 tmInv = glm::inverse(tmModel);
+
+                    glm::vec3 localActorPos = glm::vec3(tmInv * glm::vec4(actorPos, 1.0f));
+                    float localActorMinX = localActorPos.x - actorExtents.x;
+                    float localActorMaxX = localActorPos.x + actorExtents.x;
+                    float localActorMinY = localActorPos.y - actorExtents.y;
+                    float localActorMaxY = localActorPos.y + actorExtents.y;
+
+                    int minTX = static_cast<int>(std::floor(localActorMinX / tm.tileSize));
+                    int maxTX = static_cast<int>(std::floor(localActorMaxX / tm.tileSize));
+                    int minTY = static_cast<int>(std::floor(localActorMinY / tm.tileSize));
+                    int maxTY = static_cast<int>(std::floor(localActorMaxY / tm.tileSize));
+
+                    for (int ty = minTY; ty <= maxTY; ++ty) {
+                        for (int tx = minTX; tx <= maxTX; ++tx) {
+                            if (!tm.isTileSolid(tx, ty)) continue;
+
+                            float tileMinX = tx * tm.tileSize;
+                            float tileMaxX = (tx + 1) * tm.tileSize;
+                            float tileMinY = ty * tm.tileSize;
+                            float tileMaxY = (ty + 1) * tm.tileSize;
+
+                            float overlapX0 = localActorMaxX - tileMinX;
+                            float overlapX1 = tileMaxX - localActorMinX;
+                            float overlapY0 = localActorMaxY - tileMinY;
+                            float overlapY1 = tileMaxY - localActorMinY;
+
+                            if (overlapX0 > 0 && overlapX1 > 0 && overlapY0 > 0 && overlapY1 > 0) {
+                                float minOverlapX = (overlapX0 < overlapX1) ? overlapX0 : -overlapX1;
+                                float minOverlapY = (overlapY0 < overlapY1) ? overlapY0 : -overlapY1;
+
+                                glm::vec3 resolveVec(0.0f);
+                                if (std::abs(minOverlapX) < std::abs(minOverlapY)) {
+                                    resolveVec.x = -minOverlapX;
+                                } else {
+                                    resolveVec.y = -minOverlapY;
+                                }
+
+                                trans.position += resolveVec;
+                                localActorPos += resolveVec;
+                                localActorMinX += resolveVec.x; localActorMaxX += resolveVec.x;
+                                localActorMinY += resolveVec.y; localActorMaxY += resolveVec.y;
+
+                                if (rb) {
+                                    if (resolveVec.x != 0.0f) rb->velocity.x = 0.0f;
+                                    if (resolveVec.y != 0.0f) rb->velocity.y = 0.0f;
+                                    rb->hadContactThisFrame = true;
+                                }
+                            }
                         }
                     }
                 }

@@ -13,7 +13,7 @@
     #define PLUGIN_API extern "C"
 #endif
 
-PLUGIN_API void registerEngineReflection() {
+PLUGIN_API void registerScriptReflection() {
     {
         Engine::ComponentReflection refl;
         refl.name = "CinemachineVirtualCamera";
@@ -46,17 +46,28 @@ PLUGIN_API void registerEngineReflection() {
     }
 }
 
+static std::vector<std::shared_ptr<System>> s_pluginSystems;
+
 PLUGIN_API void initPlugin(PluginContext* context) {
     if (context && context->imguiContext) ImGui::SetCurrentContext(context->imguiContext);
-    registerEngineReflection();
+    registerScriptReflection();
+
+    s_pluginSystems.clear();
 
     // Register CinemachineSystem
     {
-        context->systemManager->addSystem(std::make_shared<CinemachineSystem>(*context->registry, *context->renderer, *context->editorMode));
+        auto sysPtr = std::make_shared<CinemachineSystem>(*context->registry, *context->renderer, *context->editorMode);
+        s_pluginSystems.push_back(sysPtr);
+        context->systemManager->addSystem(sysPtr);
     }
 
 }
 
 PLUGIN_API void shutdownPlugin(PluginContext* context) {
-    // Cleanup logic
+    if (context && context->systemManager) {
+        for (auto& sysPtr : s_pluginSystems) {
+            context->systemManager->removeSystem(sysPtr);
+        }
+    }
+    s_pluginSystems.clear();
 }
