@@ -17,7 +17,7 @@ PLUGIN_API void registerScriptReflection() {
         Engine::ComponentReflection refl;
         refl.name = "AStarAgent";
         refl.category = "General";
-        refl.displayName = "AStarAgent";
+        refl.displayName = "AStar Agent";
         refl.fields = {
             { "targetTransform", Engine::FieldType::Entity, offsetof(AStarAgent, targetTransform) },
             { "speed", Engine::FieldType::Float, offsetof(AStarAgent, speed) },

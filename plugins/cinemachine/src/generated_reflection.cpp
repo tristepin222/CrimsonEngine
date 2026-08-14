@@ -18,7 +18,7 @@ PLUGIN_API void registerScriptReflection() {
         Engine::ComponentReflection refl;
         refl.name = "CinemachineVirtualCamera";
         refl.category = "General";
-        refl.displayName = "CinemachineVirtualCamera";
+        refl.displayName = "Cinemachine Virtual Camera";
         refl.fields = {
             { "followTargetName", Engine::FieldType::String, offsetof(CinemachineVirtualCamera, followTargetName) },
             { "lookAtTargetName", Engine::FieldType::String, offsetof(CinemachineVirtualCamera, lookAtTargetName) },

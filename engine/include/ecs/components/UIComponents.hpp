@@ -5,14 +5,15 @@
 
 namespace Engine {
 
-
-// [ReflectClass]
+    // [ReflectClass("UI/Canvas")]
     struct CanvasComponent {
         // [ReflectField]
         bool isScreenSpace = true;
+        // [ReflectField]
+        bool isVisible = true;
     };
 
-// [ReflectClass]
+    // [ReflectClass("UI/Rect Transform")]
     struct RectTransform {
         // [ReflectField]
         glm::vec2 anchorMin{0.5f, 0.5f};
@@ -26,7 +27,7 @@ namespace Engine {
         glm::vec2 pivot{0.5f, 0.5f};
     };
 
-// [ReflectClass]
+    // [ReflectClass("UI/UI Panel")]
     struct UIPanelComponent {
         // [ReflectField]
         glm::vec4 color{0.15f, 0.15f, 0.15f, 0.8f};
@@ -34,7 +35,7 @@ namespace Engine {
         float borderRadius = 4.0f;
     };
 
-// [ReflectClass]
+    // [ReflectClass("UI/UI Image")]
     struct UIImageComponent {
         // [ReflectField]
         std::string texturePath;
@@ -42,7 +43,7 @@ namespace Engine {
         glm::vec4 tintColor{1.0f, 1.0f, 1.0f, 1.0f};
     };
 
-// [ReflectClass]
+    // [ReflectClass("UI/UI Text")]
     struct UITextComponent {
         // [ReflectField]
         std::string text = "New Text";
@@ -54,7 +55,7 @@ namespace Engine {
         bool alignCenter = false;
     };
 
-// [ReflectClass]
+    // [ReflectClass("UI/UI Button")]
     struct UIButtonComponent {
         // [ReflectField]
         std::string label = "Button";
@@ -77,7 +78,7 @@ namespace Engine {
         FixedRowCount = 2
     };
 
-// [ReflectClass]
+    // [ReflectClass("UI/UI Grid Layout Group")]
     struct UIGridLayoutGroupComponent {
         // [ReflectField]
         glm::vec2 cellSize{100.0f, 100.0f};
@@ -89,7 +90,7 @@ namespace Engine {
         int constraintCount = 3; // Max columns or max rows depending on constraint
     };
 
-// [ReflectClass]
+    // [ReflectClass("UI/UI Layout Group")]
     struct UILayoutGroupComponent {
         // [ReflectField]
         bool isVertical = true;
@@ -100,7 +101,7 @@ namespace Engine {
         bool childForceExpand = false;
     };
 
-// [ReflectClass]
+    // [ReflectClass("UI/UI Scroll Rect")]
     struct UIScrollRectComponent {
         // [ReflectField]
         bool horizontal = false;
@@ -112,7 +113,7 @@ namespace Engine {
         float scrollSpeed = 25.0f;
     };
 
-// [ReflectClass]
+    // [ReflectClass("UI/UI Slider")]
     struct UISliderComponent {
         // [ReflectField]
         float value = 0.5f;
@@ -128,7 +129,7 @@ namespace Engine {
         glm::vec4 handleColor{0.95f, 0.95f, 0.98f, 1.0f};
     };
 
-// [ReflectClass]
+    // [ReflectClass("UI/UI Toggle")]
     struct UIToggleComponent {
         // [ReflectField]
         bool isOn = true;
@@ -142,20 +143,4 @@ namespace Engine {
         glm::vec4 textColor{1.0f, 1.0f, 1.0f, 1.0f};
     };
 
-
-
 } // namespace Engine
-
-REGISTER_COMPONENT(Engine::CanvasComponent,              "UI/Canvas");
-REGISTER_COMPONENT(Engine::RectTransform,                "UI/Rect Transform");
-REGISTER_COMPONENT(Engine::UIPanelComponent,             "UI/UI Panel");
-REGISTER_COMPONENT(Engine::UIImageComponent,             "UI/UI Image");
-REGISTER_COMPONENT(Engine::UITextComponent,              "UI/UI Text");
-REGISTER_COMPONENT(Engine::UIButtonComponent,            "UI/UI Button");
-REGISTER_COMPONENT(Engine::UIGridLayoutGroupComponent,   "UI/UI Grid Layout Group");
-REGISTER_COMPONENT(Engine::UILayoutGroupComponent,       "UI/UI Layout Group");
-REGISTER_COMPONENT(Engine::UIScrollRectComponent,        "UI/UI Scroll Rect");
-REGISTER_COMPONENT(Engine::UISliderComponent,            "UI/UI Slider");
-REGISTER_COMPONENT(Engine::UIToggleComponent,            "UI/UI Toggle");
-
-

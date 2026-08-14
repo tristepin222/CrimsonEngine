@@ -5,6 +5,7 @@
 #include "ecs/components/Name.hpp"
 #include "ecs/components/Hierarchy.hpp"
 #include "ecs/components/UIComponents.hpp"
+#include "ecs/components/PrefabComponent.hpp"
 #include "ecs/components/SpriteRenderer.hpp"
 #include "renderer/VulkanRenderer.hpp"
 #include <algorithm>
@@ -277,6 +278,34 @@ bool Scene::deleteEntity(Entity entity) {
     }
     
     return true;
+}
+
+Entity Scene::instantiatePrefab(const std::string& prefabPath, const glm::vec3& position, Entity parentEntity) {
+    if (!std::filesystem::exists(prefabPath)) {
+        return Entity();
+    }
+
+    SceneSerializer serializer(registry, renderer);
+    std::vector<Entity> loadedEntities;
+    Entity rootEntity = serializer.deserializePrefab(prefabPath, loadedEntities, parentEntity);
+
+    if (registry.isValid(rootEntity)) {
+        for (Entity e : loadedEntities) {
+            trackEntity(e);
+            bool isRoot = (e == rootEntity);
+            registry.emplace_or_replace<Engine::PrefabComponent>(e, Engine::PrefabComponent{ prefabPath, isRoot });
+        }
+
+        if (position != glm::vec3(0.0f)) {
+            if (auto* trans = registry.get<Transform>(rootEntity)) {
+                trans->position = position;
+            } else if (auto* rect = registry.get<Engine::RectTransform>(rootEntity)) {
+                rect->anchoredPosition = glm::vec2(position.x, position.y);
+            }
+        }
+    }
+
+    return rootEntity;
 }
 
 /**

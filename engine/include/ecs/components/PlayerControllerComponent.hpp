@@ -3,12 +3,11 @@
 #include "core/EngineAPI.hpp"
 #include "meta/ComponentReflection.hpp"
 
-
 /**
  * @struct PlayerControllerComponent
  * @brief Component to mark and control player movement and interaction.
  */
-// [ReflectClass]
+// [ReflectClass("Gameplay/Player Controller")]
 struct ENGINE_API PlayerControllerComponent {
     /** @brief Movement speed multiplier (units/sec). */
     // [ReflectField]
@@ -36,13 +35,3 @@ struct ENGINE_API PlayerControllerComponent {
     /** @brief Debug movement input magnitude. */
     float debugMoveDirLength = 0.0f;
 };
-
-
-REGISTER_COMPONENT(PlayerControllerComponent, "Gameplay/Player Controller");
-
-
-
-
-
-
-

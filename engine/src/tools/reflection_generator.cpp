@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <regex>
 #include <algorithm>
+#include <cctype>
 
 namespace fs = std::filesystem;
 
@@ -18,6 +19,8 @@ struct ReflectedComponent {
     std::string name;
     std::string qualifiedName;
     std::string headerName;
+    std::string category = "General";
+    std::string displayName = "";
     std::vector<ReflectedField> fields;
 };
 
@@ -37,7 +40,6 @@ std::string trim(const std::string& str) {
 std::string getFieldTypeEnum(const std::string& type) {
     if (type == "float" || type == "double") return "Engine::FieldType::Float";
     if (type == "int" || type == "int32_t" || type == "uint32_t" || type == "size_t") return "Engine::FieldType::Int";
-
     if (type == "bool") return "Engine::FieldType::Bool";
     if (type == "glm::vec2" || type == "vec2") return "Engine::FieldType::Vec2";
     if (type == "glm::vec3" || type == "vec3" || type == "RotationField") return "Engine::FieldType::Vec3";
@@ -48,7 +50,6 @@ std::string getFieldTypeEnum(const std::string& type) {
     if (type == "CinemachineMode" || type.find("Mode") != std::string::npos || type.find("Enum") != std::string::npos) return "Engine::FieldType::Enum";
     return "";
 }
-
 
 // Calculate the correct relative include path for both user scripts and engine public headers
 std::string getIncludePath(const fs::path& filePath, const fs::path& inputDir) {
@@ -75,6 +76,8 @@ void parseHeader(const fs::path& filePath, const fs::path& inputDir, std::vector
     bool nextLineIsReflected = false;
     bool nextLineIsReflectedField = false;
     bool inEngineNamespace = false;
+    std::string pendingCategory = "";
+    std::string pendingDisplayName = "";
 
     while (std::getline(file, line)) {
         std::string trimmed = trim(line);
@@ -84,9 +87,27 @@ void parseHeader(const fs::path& filePath, const fs::path& inputDir, std::vector
             inEngineNamespace = true;
         }
 
-        // Check if this line is a class reflection marker
+        // Check if this line is a class reflection marker: // [ReflectClass] or // [ReflectClass("Category/Name")] or @reflect
         if ((trimmed.find("@reflect") != std::string::npos || trimmed.find("ReflectClass") != std::string::npos) && !inComponent) {
             nextLineIsReflected = true;
+            pendingCategory = "";
+            pendingDisplayName = "";
+
+            // Check if there is a menu path argument e.g. // [ReflectClass("Gameplay/Interactable")]
+            size_t q1 = trimmed.find('"');
+            if (q1 != std::string::npos) {
+                size_t q2 = trimmed.find('"', q1 + 1);
+                if (q2 != std::string::npos) {
+                    std::string menuPath = trimmed.substr(q1 + 1, q2 - q1 - 1);
+                    size_t slashPos = menuPath.find('/');
+                    if (slashPos != std::string::npos) {
+                        pendingCategory = menuPath.substr(0, slashPos);
+                        pendingDisplayName = menuPath.substr(slashPos + 1);
+                    } else {
+                        pendingCategory = menuPath;
+                    }
+                }
+            }
             continue;
         }
 
@@ -118,6 +139,27 @@ void parseHeader(const fs::path& filePath, const fs::path& inputDir, std::vector
                         currentComp.qualifiedName = "Engine::" + currentComp.name;
                     } else {
                         currentComp.qualifiedName = currentComp.name;
+                    }
+
+                    if (!pendingCategory.empty()) {
+                        currentComp.category = pendingCategory;
+                    }
+                    if (!pendingDisplayName.empty()) {
+                        currentComp.displayName = pendingDisplayName;
+                    } else {
+                        // Auto-generate clean display name from class name
+                        std::string cName = currentComp.name;
+                        if (cName.size() > 9 && cName.rfind("Component") == cName.size() - 9) {
+                            cName = cName.substr(0, cName.size() - 9);
+                        }
+                        std::string formatted;
+                        for (size_t i = 0; i < cName.size(); ++i) {
+                            if (i > 0 && std::isupper(cName[i]) && !std::isupper(cName[i-1])) {
+                                formatted += " ";
+                            }
+                            formatted += cName[i];
+                        }
+                        currentComp.displayName = formatted;
                     }
 
                     currentComp.headerName = getIncludePath(filePath, inputDir);
@@ -152,7 +194,6 @@ void parseHeader(const fs::path& filePath, const fs::path& inputDir, std::vector
                     trimmed = trimmed.substr(0, commentPos);
                 }
                 trimmed = trim(trimmed);
-
 
                 // Strip trailing semicolon
                 if (!trimmed.empty() && trimmed.back() == ';') {
@@ -262,25 +303,12 @@ int main(int argc, char* argv[]) {
         if (compName.size() > 9 && compName.rfind("Component") == compName.size() - 9) {
             compName = compName.substr(0, compName.size() - 9);
         }
-        std::string category = "General";
-        std::string displayName = compName;
-
-        if (compName == "SpriteRenderer") {
-            category = "Rendering & Lights";
-            displayName = "Sprite Renderer";
-        } else if (compName == "Mesh" || compName == "Material" || compName == "LightComponent") {
-            category = "Rendering & Lights";
-            if (compName == "LightComponent") displayName = "Light";
-        } else if (compName == "Animator" || compName == "AnimationController") {
-            category = "Animation";
-            if (compName == "AnimationController") displayName = "Animation Controller";
-        }
 
         out << "    {\n";
         out << "        Engine::ComponentReflection refl;\n";
         out << "        refl.name = \"" << compName << "\";\n";
-        out << "        refl.category = \"" << category << "\";\n";
-        out << "        refl.displayName = \"" << displayName << "\";\n";
+        out << "        refl.category = \"" << comp.category << "\";\n";
+        out << "        refl.displayName = \"" << (comp.displayName.empty() ? compName : comp.displayName) << "\";\n";
         out << "        refl.fields = {\n";
         for (size_t i = 0; i < comp.fields.size(); ++i) {
             const auto& field = comp.fields[i];

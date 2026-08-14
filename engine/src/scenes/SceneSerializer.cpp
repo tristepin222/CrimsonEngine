@@ -1224,6 +1224,25 @@ void syncReflectionSerializers() {
                             out << JSONUtils::vec4ToJson(*reinterpret_cast<glm::vec4*>(fieldPtr));
                         }
                     }
+
+                    if (refl.name == "Inventory") {
+                        struct TempItem { std::string id; std::string name; int count; };
+                        struct TempInv { std::vector<TempItem> items; int maxSlots; };
+                        auto* inv = reinterpret_cast<TempInv*>(compPtr);
+                        if (!firstField) out << ",\n";
+                        firstField = false;
+                        out << JSONUtils::indent(indent + 1) << "\"items\": [\n";
+                        for (size_t i = 0; i < inv->items.size(); ++i) {
+                            if (i > 0) out << ",\n";
+                            out << JSONUtils::indent(indent + 2) << "{\n";
+                            out << JSONUtils::indent(indent + 3) << "\"id\": " << JSONUtils::quote(inv->items[i].id) << ",\n";
+                            out << JSONUtils::indent(indent + 3) << "\"name\": " << JSONUtils::quote(inv->items[i].name) << ",\n";
+                            out << JSONUtils::indent(indent + 3) << "\"count\": " << inv->items[i].count << "\n";
+                            out << JSONUtils::indent(indent + 2) << "}";
+                        }
+                        out << "\n" << JSONUtils::indent(indent + 1) << "]";
+                    }
+
                     out << "\n" << JSONUtils::indent(indent) << "}";
                 }
             },
@@ -1318,6 +1337,26 @@ void syncReflectionSerializers() {
                             float vals[4]{};
                             if (JSONUtils::extractFloatArray(compJson, field.name, vals, 4)) {
                                 *reinterpret_cast<glm::vec4*>(fieldPtr) = glm::vec4(vals[0], vals[1], vals[2], vals[3]);
+                            }
+                        }
+                    }
+
+                    if (refl.name == "Inventory") {
+                        struct TempItem { std::string id; std::string name; int count; };
+                        struct TempInv { std::vector<TempItem> items; int maxSlots; };
+                        auto* inv = reinterpret_cast<TempInv*>(compPtr);
+                        std::string itemsJson = JSONUtils::extractSubObject(compJson, "items");
+                        if (!itemsJson.empty()) {
+                            auto itemObjects = JSONUtils::extractEntityObjects(itemsJson);
+                            inv->items.clear();
+                            for (const auto& itemObj : itemObjects) {
+                                std::string itemId = JSONUtils::extractStringValue(itemObj, "id");
+                                std::string itemName = JSONUtils::extractStringValue(itemObj, "name");
+                                float countVal = 1.0f;
+                                JSONUtils::extractFloatValue(itemObj, "count", countVal);
+                                if (!itemId.empty()) {
+                                    inv->items.push_back({ itemId, itemName, static_cast<int>(countVal) });
+                                }
                             }
                         }
                     }

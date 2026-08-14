@@ -14,7 +14,7 @@ enum class RigidBodyType {
  * @struct RigidBodyComponent
  * @brief Holds mass, velocity, acceleration, forces, restitution, bounciness, and gravity settings.
  */
-// [ReflectClass]
+// [ReflectClass("Physics/Rigid Body")]
 struct ENGINE_API RigidBodyComponent {
     RigidBodyType type = RigidBodyType::Dynamic;
     // [ReflectField]
@@ -64,8 +64,6 @@ struct ENGINE_API RigidBodyComponent {
     bool freezeRotationZ = false;
 };
 
-
-REGISTER_COMPONENT(RigidBodyComponent, "Physics/Rigid Body");
 
 
 

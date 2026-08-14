@@ -41,8 +41,32 @@ namespace Engine {
         ImGui::Begin("##GameUI_CanvasWindow", nullptr, flags);
         ImDrawList* drawList = ImGui::GetWindowDrawList();
 
+        // Auto-heal: Ensure any UI component entity has a RectTransform component
+        for (auto [ent, panel] : registry.view<UIPanelComponent>()) {
+            if (!registry.has<RectTransform>(ent)) {
+                registry.emplace<RectTransform>(ent, RectTransform{ {0.5f, 0.5f}, {0.5f, 0.5f}, {0.0f, 0.0f}, {160.0f, 36.0f}, {0.5f, 0.5f} });
+            }
+        }
+        for (auto [ent, txt] : registry.view<UITextComponent>()) {
+            if (!registry.has<RectTransform>(ent)) {
+                registry.emplace<RectTransform>(ent, RectTransform{ {0.5f, 0.5f}, {0.5f, 0.5f}, {0.0f, 0.0f}, {150.0f, 30.0f}, {0.5f, 0.5f} });
+            }
+        }
+        for (auto [ent, img] : registry.view<UIImageComponent>()) {
+            if (!registry.has<RectTransform>(ent)) {
+                registry.emplace<RectTransform>(ent, RectTransform{ {0.5f, 0.5f}, {0.5f, 0.5f}, {0.0f, 0.0f}, {100.0f, 100.0f}, {0.5f, 0.5f} });
+            }
+        }
+        for (auto [ent, btn] : registry.view<UIButtonComponent>()) {
+            if (!registry.has<RectTransform>(ent)) {
+                registry.emplace<RectTransform>(ent, RectTransform{ {0.5f, 0.5f}, {0.5f, 0.5f}, {0.0f, 0.0f}, {140.0f, 40.0f}, {0.5f, 0.5f} });
+            }
+        }
+
         // 1. Gather all Canvas root elements
         for (auto [canvasEnt, canvas] : registry.view<CanvasComponent>()) {
+            if (!canvas.isVisible) continue;
+
             // Find child elements under this Canvas hierarchy
             for (auto [ent, rect] : registry.view<RectTransform>()) {
                 bool isRoot = true;
@@ -118,9 +142,13 @@ namespace Engine {
 
         // Text Component
         if (auto* txt = registry.get<UITextComponent>(entity)) {
-            if (!txt->text.empty()) {
-                float fontScale = txt->fontSize / 14.0f;
-                ImGui::SetWindowFontScale(fontScale);
+            if (!txt->text.empty() && txt->color.a > 0.001f) {
+                ImFont* font = ImGui::GetFont();
+                if (!font && !ImGui::GetIO().Fonts->Fonts.empty()) {
+                    font = ImGui::GetIO().Fonts->Fonts[0];
+                }
+                float fontSize = (txt->fontSize > 0.0f) ? txt->fontSize : ImGui::GetFontSize();
+                if (fontSize <= 0.0f) fontSize = 14.0f;
 
                 ImVec2 textSize = ImGui::CalcTextSize(txt->text.c_str());
                 float textX = absX;
@@ -131,12 +159,21 @@ namespace Engine {
                     textY = absY + (h - textSize.y) * 0.5f;
                 }
 
-                ImGui::SetCursorScreenPos(ImVec2(textX, textY));
-                ImGui::TextColored(
-                    ImVec4(txt->color.r, txt->color.g, txt->color.b, txt->color.a),
-                    "%s", txt->text.c_str()
-                );
-                ImGui::SetWindowFontScale(1.0f);
+                if (font) {
+                    drawList->AddText(
+                        font,
+                        fontSize,
+                        ImVec2(textX, textY),
+                        ImColor(txt->color.r, txt->color.g, txt->color.b, txt->color.a),
+                        txt->text.c_str()
+                    );
+                } else {
+                    drawList->AddText(
+                        ImVec2(textX, textY),
+                        ImColor(txt->color.r, txt->color.g, txt->color.b, txt->color.a),
+                        txt->text.c_str()
+                    );
+                }
             }
         }
 

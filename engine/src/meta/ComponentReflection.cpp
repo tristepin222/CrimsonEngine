@@ -53,12 +53,8 @@ namespace Engine {
                     }
                 }
                 // 2. Merge category and display name
-                if (!refl.category.empty() && refl.category != "General") existing.category = refl.category;
-                if (!refl.displayName.empty()) {
-                    if (existing.displayName.empty() || refl.displayName != refl.name) {
-                        existing.displayName = refl.displayName;
-                    }
-                }
+                if (!refl.category.empty()) existing.category = refl.category;
+                if (!refl.displayName.empty()) existing.displayName = refl.displayName;
                 // 3. Merge lifecycle callbacks
                 if (refl.add) existing.add = refl.add;
                 if (refl.has) existing.has = refl.has;

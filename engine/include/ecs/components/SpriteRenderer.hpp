@@ -1,26 +1,22 @@
 #pragma once
-#include <glm/glm.hpp>
 #include <string>
+#include <glm/glm.hpp>
 #include "core/EngineAPI.hpp"
 
 namespace Engine {
 
     /**
      * @struct SpriteRenderer
-     * @brief Component that renders a textured 2D quad (sprite) on an entity.
+     * @brief 2D Sprite Renderer component.
      *
-     * The SpriteSystem manages a unit quad Mesh and an "Unlit" Material per sprite entity
-     * so the existing RenderSystem picks them up automatically. Use with an orthographic Camera
-     * for traditional 2D game rendering, or combine with a perspective Camera for 3D billboards.
+     * Automatically manages a 1x1 unit Quad Mesh and a Sprite Material on the entity.
+     * When attached, SpriteSystem creates/updates the Mesh and Material each frame.
      *
-     * Flip is handled via UV remapping in the sprite.vert shader — flipping does not affect
-     * the entity's Transform, Collider, or any physics component.
-     *
-     * Sort order is stored here for depth hint purposes. The SpriteSystem automatically adjusts
+     * Sorting: `sortOrder` controls depth order. SpriteSystem offsets
      * Transform.position.z by sortOrder * 0.0001f each frame so overlapping sprites layer correctly.
      * Users should keep Transform.z at 0 and use sortOrder for layering.
      */
-    // [ReflectClass]
+    // [ReflectClass("Rendering & Lights/Sprite Renderer")]
     struct ENGINE_API SpriteRenderer {
         /** @brief Path to the sprite texture asset (PNG, JPG, TGA). */
         // [ReflectField]
@@ -67,6 +63,3 @@ namespace Engine {
     };
 
 } // namespace Engine
-
-#include "meta/ComponentReflection.hpp"
-REGISTER_COMPONENT(Engine::SpriteRenderer, "Rendering & Lights/Sprite Renderer");

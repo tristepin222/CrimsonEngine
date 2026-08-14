@@ -125,6 +125,17 @@ public:
     }
 
     /**
+     * @brief Emplaces or replaces a component on an entity.
+     */
+    template<typename T>
+    T& emplace_or_replace(Entity e, T&& comp) {
+        if (has<T>(e)) {
+            remove<T>(e);
+        }
+        return emplace<T>(e, std::forward<T>(comp));
+    }
+
+    /**
      * @brief Removes a component of type T from an entity.
      * @tparam T Component type to remove.
      * @param e Target entity.

@@ -5,7 +5,7 @@
  * @struct Grid
  * @brief Represents a grid component used for rendering a grid overlay.
  */
-// [ReflectClass]
+// [ReflectClass("Rendering & Lights/Grid")]
 struct Grid {
 
     // [ReflectField]
@@ -20,9 +20,6 @@ struct Grid {
     // [ReflectField]
     glm::vec4 color = { 0.5f, 0.5f, 0.5f, 1.0f };
 
-
-
-
     /**
      * @brief Construct a new Grid object.
      * @param s Distance between lines.
@@ -33,7 +30,3 @@ struct Grid {
         : spacing(s), size(sz), color(c) {
     }
 };
-
-#include "meta/ComponentReflection.hpp"
-REGISTER_COMPONENT(Grid, "Rendering & Lights/Grid");
-

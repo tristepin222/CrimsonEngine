@@ -16,7 +16,7 @@ enum class IKSolverType {
  * @struct IKSolverComponent
  * @brief Specifies target joint chains and goal targets for analytical 2-Bone or iterative FABRIK IK.
  */
-// [ReflectClass]
+// [ReflectClass("Animation/IK Solver")]
 struct IKSolverComponent {
     IKSolverType solverType = IKSolverType::TwoBone;
     
@@ -46,8 +46,5 @@ struct IKSolverComponent {
     bool enabled = false;
 };
 
-
-#include "meta/ComponentReflection.hpp"
-REGISTER_COMPONENT(IKSolverComponent, "Animation/IK Solver");
 
 

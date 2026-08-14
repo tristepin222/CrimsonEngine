@@ -57,7 +57,7 @@ namespace Engine {
      *        References a tileset by its disk path (.tileset file).
      *        Tiles are stored sparsely in 16x16 chunks to allow painting anywhere in infinite space.
      */
-    // [ReflectClass]
+    // [ReflectClass("Rendering & Lights/Tilemap")]
     struct ENGINE_API TilemapComponent {
         // [ReflectField]
         int width = 0;
@@ -211,7 +211,4 @@ namespace Engine {
     };
 
 } // namespace Engine
-
-#include "meta/ComponentReflection.hpp"
-REGISTER_COMPONENT(Engine::TilemapComponent, "Rendering & Lights/Tilemap");
 

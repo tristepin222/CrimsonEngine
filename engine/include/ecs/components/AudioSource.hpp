@@ -9,7 +9,7 @@
  * @struct AudioSourceComponent
  * @brief Component to emit 2D or spatialized 3D sounds.
  */
-// [ReflectClass]
+// [ReflectClass("Audio/Audio Source")]
 struct ENGINE_API AudioSourceComponent {
     /** @brief Path to the audio sound clip file (e.g. .wav, .mp3, .flac). */
     // [ReflectField]
@@ -47,8 +47,6 @@ struct ENGINE_API AudioSourceComponent {
     std::string currentLoadedPath = "";
 };
 
-
-REGISTER_COMPONENT(AudioSourceComponent, "Audio/Audio Source");
 
 
 

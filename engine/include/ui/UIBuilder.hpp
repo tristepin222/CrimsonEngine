@@ -62,6 +62,10 @@ namespace Engine {
         static Entity CreateDialogueBox(Registry& registry, Entity parentCanvas, const std::string& speakerName, const std::string& dialogueText);
         static Entity CreateInventoryGrid(Registry& registry, Entity parentCanvas, int rows = 4, int cols = 5, const glm::vec2& slotSize = {48.0f, 48.0f});
 
+        // --- Zero-Allocation Query & Binding Helpers ---
+        static Entity FindChildByName(Registry& registry, Entity rootEntity, const std::string& name);
+        static Entity GetOrCreateCanvas(Registry& registry, const std::string& canvasName = "Canvas", bool isScreenSpace = true);
+
         // --- Code Generator Helper ---
         static std::string ExportHierarchyToCode(Registry& registry, Entity rootEntity);
 

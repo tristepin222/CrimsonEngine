@@ -2,6 +2,7 @@
 
 #include <string>
 #include <vector>
+#include <glm/glm.hpp>
 #include "ecs/Entity.hpp"
 #include "ecs/Registry.hpp"
 
@@ -75,6 +76,15 @@ public:
      * @return True if successfully deleted.
      */
     virtual bool deleteEntity(Entity entity);
+
+    /**
+     * @brief Instantiates a prefab asset file into the scene at a given world position.
+     * @param prefabPath Path to the .prefab asset file.
+     * @param position Target 3D position (defaults to origin).
+     * @param parentEntity Optional parent entity to attach under.
+     * @return The spawned root Entity handle.
+     */
+    virtual Entity instantiatePrefab(const std::string& prefabPath, const glm::vec3& position = glm::vec3(0.0f), Entity parentEntity = Entity());
 
     /**
      * @brief Tracks an entity under scene ownership.

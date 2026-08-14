@@ -123,39 +123,8 @@ namespace Engine {
  *   REGISTER_COMPONENT(AudioSourceComponent, "Audio/Audio Source");
  *   REGISTER_COMPONENT(SomeComp, "Rendering & Lights");  // plain category, display name auto-derived
  */
-#define REGISTER_COMPONENT_EXPAND(Type, MenuPath, Counter) \
-    namespace { \
-        struct AutoRegisterComp_##Counter { \
-            AutoRegisterComp_##Counter() { \
-                Engine::ComponentReflection refl; \
-                refl.name = #Type; \
-                size_t scopePos = refl.name.rfind("::"); \
-                if (scopePos != std::string::npos) refl.name = refl.name.substr(scopePos + 2); \
-                if (refl.name.size() > 9 && refl.name.rfind("Component") == refl.name.size() - 9) { \
-                    refl.name = refl.name.substr(0, refl.name.size() - 9); \
-                } \
-                /* Parse "Category/Display Name" path */ \
-                std::string _path = MenuPath; \
-                size_t _slash = _path.rfind('/'); \
-                if (_slash != std::string::npos) { \
-                    refl.category    = _path.substr(0, _slash); \
-                    refl.displayName = _path.substr(_slash + 1); \
-                } else { \
-                    refl.category    = _path; \
-                    refl.displayName = ""; /* derived from name at render time */ \
-                } \
-                refl.add = [](Registry& reg, Entity e) { reg.emplace<Type>(e, Type{}); }; \
-                refl.has = [](Registry& reg, Entity e) { return reg.has<Type>(e); }; \
-                refl.remove = [](Registry& reg, Entity e) { reg.remove<Type>(e); }; \
-                refl.get = [](Registry& reg, Entity e) { return static_cast<void*>(reg.get<Type>(e)); }; \
-                Engine::ComponentReflectionRegistry::getInstance().registerComponent(refl); \
-            } \
-        }; \
-        static AutoRegisterComp_##Counter global_autoRegComp_##Counter; \
-    }
-
-#define REGISTER_COMPONENT_CONCAT(Type, MenuPath, Counter) REGISTER_COMPONENT_EXPAND(Type, MenuPath, Counter)
-#define REGISTER_COMPONENT(Type, MenuPath) REGISTER_COMPONENT_CONCAT(Type, MenuPath, __COUNTER__)
+// REGISTER_COMPONENT macro is deprecated. All components now register uniformly via // [ReflectClass("Category/Name")]
+#define REGISTER_COMPONENT(Type, MenuPath)
 
 #define REFLECT_COMPONENT_EXPAND(Type, MenuPath, Counter, InitFunc) \
     namespace { \

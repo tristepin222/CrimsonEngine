@@ -20,12 +20,14 @@
 #include "ecs/components/PlayerControllerComponent.hpp"
 #include "ecs/components/Tilemap.hpp"
 #include "ecs/components/UIComponents.hpp"
+#include "ecs/components/PrefabComponent.hpp"
 #include "ecs/components/SpriteRenderer.hpp"
 #include "ui/UIBuilder.hpp"
 #include "renderer/VulkanRenderer.hpp"
 #include "renderer/ResourceManager.hpp"
 #include "scenes/Scene.hpp"
 #include "scenes/SceneManager.hpp"
+#include "scenes/SceneSerializer.hpp"
 
 #include <set>
 #include <GLFW/glfw3.h>
@@ -93,6 +95,23 @@ bool EditorUI::drawVec3Control(const char* label, float* values, float speed) {
 }
 
 void EditorUI::drawTransformEditor() {
+    if (hasSelection && registry.isValid(selectedEntity)) {
+        if (registry.has<Engine::CanvasComponent>(selectedEntity) ||
+            registry.has<Engine::UIPanelComponent>(selectedEntity) ||
+            registry.has<Engine::UITextComponent>(selectedEntity) ||
+            registry.has<Engine::UIImageComponent>(selectedEntity) ||
+            registry.has<Engine::UIButtonComponent>(selectedEntity)) {
+            if (!registry.has<Engine::RectTransform>(selectedEntity)) {
+                registry.emplace<Engine::RectTransform>(selectedEntity, Engine::RectTransform{});
+            }
+        }
+    }
+
+    // UI Entities with RectTransform use UI RectTransform in place of 3D Transform
+    if (registry.has<Engine::RectTransform>(selectedEntity)) {
+        return;
+    }
+
     Transform* transform = registry.get<Transform>(selectedEntity);
     if (!transform || !CollapsingHeader("Transform", ImGuiTreeNodeFlags_DefaultOpen)) {
         return;
@@ -1768,6 +1787,58 @@ void EditorUI::drawReflectedComponentsEditor() {
             }
         }
 
+        // Custom Inspector drawer for Inventory component items list
+        if (refl.name == "Inventory") {
+            struct TempInventoryItem {
+                std::string itemId;
+                std::string itemName;
+                int count;
+            };
+            struct TempInventory {
+                std::vector<TempInventoryItem> items;
+                int maxSlots;
+            };
+            auto* inv = reinterpret_cast<TempInventory*>(compPtr);
+            ImGui::Separator();
+            ImGui::Text("Inventory Items (%d / %d):", static_cast<int>(inv->items.size()), inv->maxSlots);
+            ImGui::Spacing();
+
+            int toRemoveIdx = -1;
+            for (size_t i = 0; i < inv->items.size(); ++i) {
+                auto& item = inv->items[i];
+                ImGui::PushID(static_cast<int>(i));
+                char idBuf[64], nameBuf[64];
+                strncpy_s(idBuf, item.itemId.c_str(), sizeof(idBuf) - 1);
+                strncpy_s(nameBuf, item.itemName.c_str(), sizeof(nameBuf) - 1);
+
+                ImGui::SetNextItemWidth(70.0f);
+                if (ImGui::InputText("ID", idBuf, sizeof(idBuf))) {
+                    item.itemId = idBuf;
+                }
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(90.0f);
+                if (ImGui::InputText("Name", nameBuf, sizeof(nameBuf))) {
+                    item.itemName = nameBuf;
+                }
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(55.0f);
+                ImGui::DragInt("Qty", &item.count, 1, 1, 999);
+                ImGui::SameLine();
+                if (ImGui::Button("X")) {
+                    toRemoveIdx = static_cast<int>(i);
+                }
+                ImGui::PopID();
+            }
+
+            if (toRemoveIdx >= 0 && toRemoveIdx < static_cast<int>(inv->items.size())) {
+                inv->items.erase(inv->items.begin() + toRemoveIdx);
+            }
+
+            if (ImGui::Button("+ Add Item", ImVec2(-1, 0))) {
+                inv->items.push_back({ "wood", "Wood Plank", 1 });
+            }
+        }
+
         // Draw runtime diagnostic section for PlayerController if playing
         if (refl.name == "PlayerController" && editorMode.isPlaying) {
             auto* pc = static_cast<PlayerControllerComponent*>(compPtr);
@@ -2040,6 +2111,54 @@ void EditorUI::drawTilemapInspector() {
 
 void EditorUI::drawUIComponentsEditor() {
     if (!hasSelection) return;
+
+    // 0. Prefab Instance Editor
+    if (auto* prefab = registry.get<Engine::PrefabComponent>(selectedEntity)) {
+        PushStyleColor(ImGuiCol_Header,        ImVec4(0.10f, 0.45f, 0.65f, 1.f));
+        PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(0.15f, 0.55f, 0.75f, 1.f));
+        PushStyleColor(ImGuiCol_HeaderActive,  ImVec4(0.08f, 0.35f, 0.55f, 1.f));
+        bool visible = true;
+        if (CollapsingHeader("Prefab Instance", &visible, ImGuiTreeNodeFlags_DefaultOpen)) {
+            Text("Source Asset: %s", prefab->prefabAssetPath.c_str());
+            Spacing();
+
+            if (Button("Save / Apply to Prefab")) {
+                if (!prefab->prefabAssetPath.empty()) {
+                    SceneSerializer serializer(registry, renderer);
+                    if (serializer.serializePrefab(prefab->prefabAssetPath, selectedEntity)) {
+                        statusMessage = "Saved changes to prefab asset: " + prefab->prefabAssetPath;
+                    } else {
+                        statusMessage = "Failed to save prefab asset: " + prefab->prefabAssetPath;
+                    }
+                }
+            }
+            SameLine();
+            if (Button("Revert / Reload")) {
+                Scene* currentScene = sceneManager.getCurrentScene();
+                if (currentScene && !prefab->prefabAssetPath.empty()) {
+                    std::string path = prefab->prefabAssetPath;
+                    Entity parent = Entity();
+                    if (auto* h = registry.get<HierarchyComponent>(selectedEntity)) {
+                        parent = h->parent;
+                    }
+                    currentScene->deleteEntity(selectedEntity);
+                    selectedEntity = currentScene->instantiatePrefab(path, glm::vec3(0.0f), parent);
+                    hasSelection = registry.isValid(selectedEntity);
+                    statusMessage = "Reverted prefab instance from " + path;
+                }
+            }
+            SameLine();
+            if (Button("Unpack")) {
+                registry.remove<Engine::PrefabComponent>(selectedEntity);
+                statusMessage = "Unpacked prefab instance.";
+            }
+        }
+        PopStyleColor(3);
+        if (!visible) {
+            registry.remove<Engine::PrefabComponent>(selectedEntity);
+            statusMessage = "Removed Prefab component.";
+        }
+    }
 
     // 1. Canvas Editor
     if (auto* canvas = registry.get<Engine::CanvasComponent>(selectedEntity)) {

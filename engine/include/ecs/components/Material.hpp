@@ -13,7 +13,7 @@ enum class TextureFilterMode {
  * @struct Material
  * @brief Represents a material component defining rendering properties.
  */
-// [ReflectClass]
+// [ReflectClass("Rendering & Lights/Material")]
 struct Material {
 
     /** @brief Unique identifier for this material. */
@@ -56,7 +56,4 @@ struct Material {
         : color(c), descriptorSet(ds) {
     }
 };
-
-#include "meta/ComponentReflection.hpp"
-REGISTER_COMPONENT(Material, "Rendering & Lights/Material");
 

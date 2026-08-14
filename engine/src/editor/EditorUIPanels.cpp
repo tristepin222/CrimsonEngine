@@ -21,9 +21,20 @@
 #include "ecs/components/Transform.hpp"
 #include "ecs/components/Camera.hpp"
 #include "ecs/components/Grid.hpp"
+#include "ecs/components/PrefabComponent.hpp"
 #include "ecs/components/Skeleton.hpp"
 #include "ecs/components/Animator.hpp"
 #include "ecs/components/Hierarchy.hpp"
+
+namespace {
+    inline bool isPrefabFile(const std::string& pathStr) {
+        if (pathStr.empty()) return false;
+        std::filesystem::path p(pathStr);
+        std::string ext = p.extension().string();
+        for (char& c : ext) c = static_cast<char>(::tolower(c));
+        return ext == ".prefab";
+    }
+}
 #include "ecs/components/EditorCamera.hpp"
 #include "ecs/components/AnimationController.hpp"
 #include "ecs/components/IKSolver.hpp"
@@ -250,6 +261,31 @@ void EditorUI::drawPanels() {
     drawPhysgunDebugOverlay();
     drawTilemapGridOverlay();
     handleViewportPicking();
+
+    // Viewport Drag and Drop Target for Prefabs
+    ImGui::SetNextWindowPos(ImVec2(leftWidth, topY));
+    ImGui::SetNextWindowSize(ImVec2(width - leftWidth - rightWidth, workHeight - bottomHeight));
+    ImGui::Begin("##ViewportDropTargetWindow", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoSavedSettings);
+    ImGui::End();
+
+    if (ImGui::BeginDragDropTarget()) {
+        if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DND_PAYLOAD_ASSET_PATH")) {
+            const char* pathStr = (const char*)payload->Data;
+            std::string path(pathStr);
+            if (isPrefabFile(path)) {
+                Scene* currentScene = sceneManager.getCurrentScene();
+                if (currentScene) {
+                    Entity created = currentScene->instantiatePrefab(path);
+                    if (registry.isValid(created)) {
+                        selectedEntity = created;
+                        hasSelection = true;
+                        statusMessage = "Instantiated prefab " + path + " into viewport.";
+                    }
+                }
+            }
+        }
+        ImGui::EndDragDropTarget();
+    }
     
     // 7. Float Import Settings panel
     drawImportSettingsWindow();
@@ -441,11 +477,21 @@ void EditorUI::drawHierarchyPanel() {
             ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(0.00f, 0.48f, 0.80f, 0.80f));
         }
 
-        std::string label = nameComp->value + "##" + std::to_string(entity.getId());
+        bool isPrefab = registry.has<Engine::PrefabComponent>(entity);
+        if (isPrefab) {
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.20f, 0.80f, 1.00f, 1.00f));
+        }
+
+        std::string displayName = (isPrefab ? "[P] " : "") + nameComp->value;
+        std::string label = displayName + "##" + std::to_string(entity.getId());
         if (Selectable(label.c_str(), selected, ImGuiSelectableFlags_SpanAllColumns)) {
             selectedEntity = entity;
             hasSelection = true;
             renameBuffer = nameComp->value;
+        }
+
+        if (isPrefab) {
+            ImGui::PopStyleColor();
         }
 
         // Drag source for hierarchy moving/rearranging
@@ -456,7 +502,7 @@ void EditorUI::drawHierarchyPanel() {
             ImGui::EndDragDropSource();
         }
 
-        // Drop target for parenting
+        // Drop target for parenting or instantiating prefabs under this entity
         if (ImGui::BeginDragDropTarget()) {
             if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DND_PAYLOAD_HIERARCHY_ENTITY")) {
                 std::uint32_t draggedId = *static_cast<const std::uint32_t*>(payload->Data);
@@ -486,6 +532,21 @@ void EditorUI::drawHierarchyPanel() {
                     statusMessage = "Parented entity under " + nameComp->value;
                 } else {
                     statusMessage = "Cannot parent an entity to itself or its descendants!";
+                }
+            }
+            if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DND_PAYLOAD_ASSET_PATH")) {
+                const char* pathStr = (const char*)payload->Data;
+                std::string path(pathStr);
+                if (isPrefabFile(path)) {
+                    Scene* activeScene = currentScene ? currentScene : sceneManager.getCurrentScene();
+                    if (activeScene) {
+                        Entity created = activeScene->instantiatePrefab(path, glm::vec3(0.0f), entity);
+                        if (registry.isValid(created)) {
+                            selectedEntity = created;
+                            hasSelection = true;
+                            statusMessage = "Instantiated prefab under " + nameComp->value;
+                        }
+                    }
                 }
             }
             ImGui::EndDragDropTarget();
@@ -626,6 +687,23 @@ void EditorUI::drawHierarchyPanel() {
                 statusMessage = "Unparented entity to root.";
             }
         }
+        if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DND_PAYLOAD_ASSET_PATH")) {
+            if (payload->Data && payload->DataSize > 0) {
+                const char* pathStr = (const char*)payload->Data;
+                std::string path(pathStr);
+                if (isPrefabFile(path)) {
+                    Scene* activeScene = currentScene ? currentScene : sceneManager.getCurrentScene();
+                    if (activeScene) {
+                        Entity created = activeScene->instantiatePrefab(path);
+                        if (registry.isValid(created)) {
+                            selectedEntity = created;
+                            hasSelection = true;
+                            statusMessage = "Instantiated prefab " + path;
+                        }
+                    }
+                }
+            }
+        }
         ImGui::EndDragDropTarget();
     }
 
@@ -647,6 +725,27 @@ void EditorUI::drawHierarchyPanel() {
     }
 
     ImGui::EndChild(); // End of HierarchyTreeChild scrolling area
+
+    if (ImGui::BeginDragDropTarget()) {
+        if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DND_PAYLOAD_ASSET_PATH")) {
+            if (payload->Data && payload->DataSize > 0) {
+                const char* pathStr = (const char*)payload->Data;
+                std::string path(pathStr);
+                if (isPrefabFile(path)) {
+                    Scene* activeScene = currentScene ? currentScene : sceneManager.getCurrentScene();
+                    if (activeScene) {
+                        Entity created = activeScene->instantiatePrefab(path);
+                        if (registry.isValid(created)) {
+                            selectedEntity = created;
+                            hasSelection = true;
+                            statusMessage = "Instantiated prefab " + path;
+                        }
+                    }
+                }
+            }
+        }
+        ImGui::EndDragDropTarget();
+    }
 
 
     PopStyleVar();
@@ -724,7 +823,20 @@ void EditorUI::drawInspectorPanel() {
         }
     }
     SameLine();
-    if (Button("Save as Prefab")) {
+    if (auto* existingPrefab = registry.get<Engine::PrefabComponent>(selectedEntity)) {
+        if (!existingPrefab->prefabAssetPath.empty()) {
+            if (Button("Save Prefab")) {
+                SceneSerializer serializer(registry, renderer);
+                if (serializer.serializePrefab(existingPrefab->prefabAssetPath, selectedEntity)) {
+                    statusMessage = "Saved changes to prefab asset: " + existingPrefab->prefabAssetPath;
+                } else {
+                    statusMessage = "Failed to save prefab asset: " + existingPrefab->prefabAssetPath;
+                }
+            }
+            SameLine();
+        }
+    }
+    if (Button("Save as New Prefab")) {
         std::string prefabDir = "assets/prefabs";
         if (!std::filesystem::exists(prefabDir)) {
             std::filesystem::create_directories(prefabDir);
@@ -732,6 +844,7 @@ void EditorUI::drawInspectorPanel() {
         std::string prefabPath = prefabDir + "/" + name->value + ".prefab";
         SceneSerializer serializer(registry, renderer);
         if (serializer.serializePrefab(prefabPath, selectedEntity)) {
+            registry.emplace_or_replace<Engine::PrefabComponent>(selectedEntity, Engine::PrefabComponent{ prefabPath, true });
             statusMessage = "Saved prefab to " + prefabPath;
         } else {
             statusMessage = "Failed to save prefab.";
@@ -821,8 +934,8 @@ void EditorUI::drawInspectorPanel() {
                     }
 
                     // Auto-attach RectTransform for any UI component
-                    if (entry.refl->category == "UI" &&
-                        entry.refl->name != "Canvas" &&
+                    if ((entry.refl->category == "UI" || entry.refl->category.rfind("UI/", 0) == 0) &&
+                        entry.refl->name != "Canvas" && entry.refl->name != "CanvasComponent" &&
                         !registry.has<Engine::RectTransform>(selectedEntity)) {
                         registry.emplace<Engine::RectTransform>(selectedEntity, Engine::RectTransform{});
                     }
@@ -1077,6 +1190,24 @@ void EditorUI::drawAssetBrowser() {
                                 } catch (...) {}
                             }
                         }
+                    } else if (const ImGuiPayload* payload = AcceptDragDropPayload("DND_PAYLOAD_HIERARCHY_ENTITY")) {
+                        if (payload->Data && payload->DataSize > 0) {
+                            std::uint32_t entId = *static_cast<const std::uint32_t*>(payload->Data);
+                            Entity draggedEntity(entId);
+                            if (registry.isValid(draggedEntity)) {
+                                Name* nameComp = registry.get<Name>(draggedEntity);
+                                std::string entName = nameComp ? nameComp->value : "Prefab";
+                                std::filesystem::path targetDir = entry.path();
+                                std::filesystem::create_directories(targetDir);
+                                std::filesystem::path prefabPath = targetDir / (entName + ".prefab");
+                                
+                                SceneSerializer serializer(registry, renderer);
+                                if (serializer.serializePrefab(prefabPath.string(), draggedEntity)) {
+                                    registry.emplace_or_replace<Engine::PrefabComponent>(draggedEntity, Engine::PrefabComponent{ prefabPath.string(), true });
+                                    statusMessage = "Created prefab " + prefabPath.string();
+                                }
+                            }
+                        }
                     }
                     EndDragDropTarget();
                 }
@@ -1211,6 +1342,26 @@ void EditorUI::drawAssetBrowser() {
                         s_selectedAssetPaths.clear();
                         s_selectedAssetPaths.insert(entry.path());
                     }
+                }
+
+                if (BeginDragDropSource(ImGuiDragDropFlags_None)) {
+                    std::string multiPaths;
+                    for (const auto& p : s_selectedAssetPaths) {
+                        if (!multiPaths.empty()) multiPaths += "|";
+                        multiPaths += p.generic_string();
+                    }
+                    if (s_selectedAssetPaths.find(entry.path()) == s_selectedAssetPaths.end()) {
+                        multiPaths = entry.path().generic_string();
+                    }
+
+                    if (s_selectedAssetPaths.size() > 1 && s_selectedAssetPaths.find(entry.path()) != s_selectedAssetPaths.end()) {
+                        SetDragDropPayload("DND_PAYLOAD_MULTI_ASSETS", multiPaths.c_str(), multiPaths.size() + 1);
+                        Text("Dragging %d assets", (int)s_selectedAssetPaths.size());
+                    } else {
+                        SetDragDropPayload("DND_PAYLOAD_ASSET_PATH", pathStr.c_str(), pathStr.size() + 1);
+                        Text("Dragging %s", name.c_str());
+                    }
+                    EndDragDropSource();
                 }
 
                 // Right click context menu on files (must follow Selectable immediately to bind correctly)
@@ -1362,26 +1513,6 @@ void EditorUI::drawAssetBrowser() {
                     PopStyleColor();
                     EndPopup();
                 }
-
-                if (BeginDragDropSource(ImGuiDragDropFlags_None)) {
-                    std::string multiPaths;
-                    for (const auto& p : s_selectedAssetPaths) {
-                        if (!multiPaths.empty()) multiPaths += "|";
-                        multiPaths += p.generic_string();
-                    }
-                    if (s_selectedAssetPaths.find(entry.path()) == s_selectedAssetPaths.end()) {
-                        multiPaths = entry.path().generic_string();
-                    }
-
-                    if (s_selectedAssetPaths.size() > 1 && s_selectedAssetPaths.find(entry.path()) != s_selectedAssetPaths.end()) {
-                        SetDragDropPayload("DND_PAYLOAD_MULTI_ASSETS", multiPaths.c_str(), multiPaths.size() + 1);
-                        Text("Dragging %d assets", (int)s_selectedAssetPaths.size());
-                    } else {
-                        SetDragDropPayload("DND_PAYLOAD_ASSET_PATH", pathStr.c_str(), pathStr.size() + 1);
-                        Text("Dragging %s", name.c_str());
-                    }
-                    EndDragDropSource();
-                }
             }
         }
     };
@@ -1428,6 +1559,24 @@ void EditorUI::drawAssetBrowser() {
                             statusMessage = "Moved " + src.filename().string() + " to assets root.";
                         } catch (const std::exception& e) {
                             statusMessage = std::string("Failed to move: ") + e.what();
+                        }
+                    }
+                }
+            } else if (const ImGuiPayload* payload = AcceptDragDropPayload("DND_PAYLOAD_HIERARCHY_ENTITY")) {
+                if (payload->Data && payload->DataSize > 0) {
+                    std::uint32_t entId = *static_cast<const std::uint32_t*>(payload->Data);
+                    Entity draggedEntity(entId);
+                    if (registry.isValid(draggedEntity)) {
+                        Name* nameComp = registry.get<Name>(draggedEntity);
+                        std::string entName = nameComp ? nameComp->value : "Prefab";
+                        std::string prefabDir = "assets/prefabs";
+                        std::filesystem::create_directories(prefabDir);
+                        std::string prefabPath = prefabDir + "/" + entName + ".prefab";
+                        
+                        SceneSerializer serializer(registry, renderer);
+                        if (serializer.serializePrefab(prefabPath, draggedEntity)) {
+                            registry.emplace_or_replace<Engine::PrefabComponent>(draggedEntity, Engine::PrefabComponent{ prefabPath, true });
+                            statusMessage = "Created prefab " + prefabPath;
                         }
                     }
                 }

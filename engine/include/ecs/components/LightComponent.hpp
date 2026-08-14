@@ -1,29 +1,24 @@
 #pragma once
 #include <glm/glm.hpp>
 #include "core/EngineAPI.hpp"
-#include "meta/ComponentReflection.hpp"
-
 
 namespace Engine {
 
     /**
      * @enum LightType
-     * @brief Type of light source calculation.
+     * @brief Specifies the light emission type (Directional, Point, Spot).
      */
     enum class LightType {
-        /** @brief Global directional light (e.g., Sun). */
-        Directional = 0,
-        /** @brief Omnidirectional point light source. */
-        Point = 1,
-        /** @brief Cone-constrained spot light source. */
-        Spot = 2
+        Directional,
+        Point,
+        Spot
     };
 
     /**
      * @struct LightComponent
      * @brief Component representing a light source in the scene.
      */
-    // [ReflectClass]
+    // [ReflectClass("Rendering & Lights/Light")]
     struct ENGINE_API LightComponent {
         /** @brief Type classification of the light source. */
         LightType type = LightType::Directional;
@@ -38,10 +33,4 @@ namespace Engine {
         float range = 10.0f; 
     };
 
-
 } // namespace Engine
-
-REGISTER_COMPONENT(Engine::LightComponent, "Rendering & Lights/Light");
-
-
-

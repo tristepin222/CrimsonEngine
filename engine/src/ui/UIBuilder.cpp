@@ -227,12 +227,24 @@ namespace Engine {
     }
 
     void UIBuilder::SetVisible(Registry& registry, Entity widgetEntity, bool visible) {
-        if (registry.isValid(widgetEntity)) {
-            if (auto* panel = registry.get<UIPanelComponent>(widgetEntity)) {
-                panel->color.a = visible ? 0.8f : 0.0f;
-            }
-            if (auto* txt = registry.get<UITextComponent>(widgetEntity)) {
-                txt->color.a = visible ? 1.0f : 0.0f;
+        if (!registry.isValid(widgetEntity)) return;
+
+        if (auto* canvas = registry.get<CanvasComponent>(widgetEntity)) {
+            canvas->isVisible = visible;
+        }
+        if (auto* panel = registry.get<UIPanelComponent>(widgetEntity)) {
+            panel->color.a = visible ? 0.85f : 0.0f;
+        }
+        if (auto* txt = registry.get<UITextComponent>(widgetEntity)) {
+            txt->color.a = visible ? 1.0f : 0.0f;
+        }
+        if (auto* img = registry.get<UIImageComponent>(widgetEntity)) {
+            img->tintColor.a = visible ? 1.0f : 0.0f;
+        }
+
+        for (auto [child, h] : registry.view<HierarchyComponent>()) {
+            if (h.parent == widgetEntity) {
+                SetVisible(registry, child, visible);
             }
         }
     }
@@ -287,6 +299,28 @@ namespace Engine {
         builder.EndContainer(); // Panel
 
         return builder.GetLastCreatedWidget();
+    }
+
+    Entity UIBuilder::FindChildByName(Registry& registry, Entity rootEntity, const std::string& name) {
+        if (!registry.isValid(rootEntity)) return Entity();
+
+        for (auto [e, h, n] : registry.view<HierarchyComponent, Name>()) {
+            if (h.parent == rootEntity) {
+                if (n.value == name) return e;
+                Entity res = FindChildByName(registry, e, name);
+                if (registry.isValid(res)) return res;
+            }
+        }
+        return Entity();
+    }
+
+    Entity UIBuilder::GetOrCreateCanvas(Registry& registry, const std::string& canvasName, bool isScreenSpace) {
+        for (auto [e, n, c] : registry.view<Name, CanvasComponent>()) {
+            if (n.value == canvasName) return e;
+        }
+        UIBuilder builder(registry);
+        builder.BeginCanvas(canvasName, isScreenSpace);
+        return builder.GetCanvas();
     }
 
     std::string UIBuilder::ExportHierarchyToCode(Registry& registry, Entity rootEntity) {
