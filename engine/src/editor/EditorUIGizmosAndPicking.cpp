@@ -91,12 +91,33 @@ void EditorUI::drawGizmo()
         worldMatrix = parentWorldMatrix * transform->matrix();
     }
 
+    ImGuizmo::OPERATION op = ImGuizmo::TRANSLATE;
+    if (gizmoOperation == 1) op = ImGuizmo::ROTATE;
+    else if (gizmoOperation == 2) op = ImGuizmo::SCALE;
+
+    ImGuizmo::MODE mode = (gizmoMode == 1) ? ImGuizmo::LOCAL : ImGuizmo::WORLD;
+
+    float snapValue[3] = { snapTranslation, snapTranslation, snapTranslation };
+    if (op == ImGuizmo::ROTATE) {
+        snapValue[0] = snapRotation;
+        snapValue[1] = snapRotation;
+        snapValue[2] = snapRotation;
+    } else if (op == ImGuizmo::SCALE) {
+        snapValue[0] = snapScale;
+        snapValue[1] = snapScale;
+        snapValue[2] = snapScale;
+    }
+
+    float* pSnap = (useSnap || io.KeyCtrl) ? snapValue : nullptr;
+
     ImGuizmo::Manipulate(
         &view[0][0],
         &proj[0][0],
-        ImGuizmo::TRANSLATE,
-        ImGuizmo::LOCAL,
-        &worldMatrix[0][0]
+        op,
+        mode,
+        &worldMatrix[0][0],
+        nullptr,
+        pSnap
     );
 
     if (ImGuizmo::IsUsing()) {

@@ -63,23 +63,33 @@ namespace Engine {
             }
         }
 
-        // 1. Gather all Canvas root elements
-        for (auto [canvasEnt, canvas] : registry.view<CanvasComponent>()) {
-            if (!canvas.isVisible) continue;
+        // Helper lambda: check if an entity has a CanvasComponent ancestor that is hidden
+        auto isCanvasHidden = [&](Entity e) -> bool {
+            Entity curr = e;
+            while (registry.isValid(curr)) {
+                if (auto* canvas = registry.get<CanvasComponent>(curr)) {
+                    if (!canvas->isVisible) return true;
+                }
+                auto* h = registry.get<HierarchyComponent>(curr);
+                if (!h || h->parent.getId() == Entity::INVALID_ENTITY || !registry.isValid(h->parent) || h->parent == curr) break;
+                curr = h->parent;
+            }
+            return false;
+        };
 
-            // Find child elements under this Canvas hierarchy
-            for (auto [ent, rect] : registry.view<RectTransform>()) {
-                bool isRoot = true;
-                if (auto* hierarchy = registry.get<HierarchyComponent>(ent)) {
-                    if (hierarchy->parent.getId() != Entity::INVALID_ENTITY && registry.isValid(hierarchy->parent)) {
-                        // If parent has a RectTransform component, then it's a child widget, not a root widget
-                        if (registry.has<RectTransform>(hierarchy->parent)) {
-                            isRoot = false;
-                        }
+        // Render root UI widgets
+        for (auto [ent, rect] : registry.view<RectTransform>()) {
+            bool isRootWidget = true;
+            if (auto* hierarchy = registry.get<HierarchyComponent>(ent)) {
+                if (hierarchy->parent.getId() != Entity::INVALID_ENTITY && registry.isValid(hierarchy->parent)) {
+                    if (registry.has<RectTransform>(hierarchy->parent)) {
+                        isRootWidget = false;
                     }
                 }
+            }
 
-                if (isRoot) {
+            if (isRootWidget) {
+                if (!isCanvasHidden(ent)) {
                     drawWidget(ent, viewportPos, viewportSize, drawList);
                 }
             }

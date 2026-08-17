@@ -13,8 +13,11 @@
 #include "../components/Grid.hpp"
 #include "../components/pushconstants.hpp"
 #include "../components/Hierarchy.hpp"
+#include "../components/SpriteRenderer.hpp"
+#include "../components/Tilemap.hpp"
 #include <functional>
 #include <fstream>
+#include <algorithm>
 #include "core/JobSystem.hpp"
 
 /**
@@ -105,11 +108,11 @@ public:
         renderer.instanceBuffer.uploadData(gpuData.data(), gpuData.size() * sizeof(InstanceDataGPU));
 
 
-        // --- Draw grids ---
-        drawGrids();
-
-        // --- Draw instances ---
+        // --- Draw instances (meshes, tilemaps, sprites) ---
         drawBatches();
+
+        // --- Draw grid overlay ---
+        drawGrids();
 
         if (overlayPass) {
             overlayPass(cmd);
@@ -267,12 +270,24 @@ private:
     /**
      * @brief Binds pipelines, descriptor sets, and draw buffers for geometry batches.
      */
+    struct RenderDrawCall {
+        Entity entity;
+        Mesh* mesh = nullptr;
+        Material* mat = nullptr;
+        size_t instanceIdx = 0;
+        int sortOrder = 0;
+        float zPos = 0.0f;
+    };
+
+    /**
+     * @brief Binds pipelines, descriptor sets, and draw buffers for geometry batches.
+     */
     void drawBatches() {
         VkCommandBuffer cmd = renderer.getCurrentCommandBuffer();
         VkDescriptorSet cameraSet = renderer.getCameraDescriptorSet();
 
-        // --- Group instances by Mesh + Material using the *existing* instance indices and track their Entities
-        std::unordered_map<std::pair<Mesh*, Material*>, std::vector<std::pair<Entity, size_t>>, pair_hash> batches;
+        std::vector<RenderDrawCall> drawCalls;
+        drawCalls.reserve(entities.size());
 
         for (Entity e : entities) {
             auto* mesh = registry.get<Mesh>(e);
@@ -283,99 +298,115 @@ private:
             auto it = entityToInstanceIndex.find(e);
             if (it == entityToInstanceIndex.end()) continue;
             size_t idx = it->second;
-            batches[{mesh, mat}].push_back({e, idx});
+
+            int sortOrder = 0;
+            if (auto* spr = registry.get<Engine::SpriteRenderer>(e)) {
+                sortOrder = spr->sortOrder;
+            } else if (registry.has<Engine::TilemapComponent>(e)) {
+                sortOrder = -1000; // Tilemaps draw behind standard 2D sprites by default
+            }
+
+            float zPos = transform->position.z;
+
+            drawCalls.push_back({ e, mesh, mat, idx, sortOrder, zPos });
         }
 
-        for (auto& [key, batch] : batches) {
-            Mesh* mesh = key.first;
-            Material* mat = key.second;
+        // Sort back-to-front (lowest sortOrder first, then zPos, then mat, then mesh)
+        std::sort(drawCalls.begin(), drawCalls.end(), [](const RenderDrawCall& a, const RenderDrawCall& b) {
+            if (a.sortOrder != b.sortOrder) return a.sortOrder < b.sortOrder;
+            if (a.zPos != b.zPos) return a.zPos < b.zPos;
+            if (a.mat != b.mat) return a.mat < b.mat;
+            return a.mesh < b.mesh;
+        });
 
-            if (!mesh || !mat || batch.empty() || mesh->vertexBuffer == VK_NULL_HANDLE || mesh->indexBuffer == VK_NULL_HANDLE || mat->pipeline == VK_NULL_HANDLE) continue;
+        Material* currentMat = nullptr;
+        Mesh* currentMesh = nullptr;
 
+        for (const auto& dc : drawCalls) {
+            Mesh* mesh = dc.mesh;
+            Material* mat = dc.mat;
+            if (!mesh || !mat || mesh->vertexBuffer == VK_NULL_HANDLE || mesh->indexBuffer == VK_NULL_HANDLE || mat->pipeline == VK_NULL_HANDLE) continue;
 
-            // --- Bind pipeline
-            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mat->pipeline);
+            if (mat != currentMat) {
+                currentMat = mat;
+                currentMesh = nullptr; // force vertex buffer rebind when material changes
 
-            // --- Bind descriptor sets (camera at set 0, material sampler at set 1)
-            VkDescriptorSet descriptorSets[2] = {
-                cameraSet,
-                mat->descriptorSet != VK_NULL_HANDLE ? mat->descriptorSet : renderer.getDefaultTextureSet()
-            };
+                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mat->pipeline);
 
-            vkCmdBindDescriptorSets(cmd,
-                VK_PIPELINE_BIND_POINT_GRAPHICS,
-                mat->pipelineLayout,
-                0,
-                2,
-                descriptorSets,
-                0,
-                nullptr);
+                VkDescriptorSet descriptorSets[2] = {
+                    cameraSet,
+                    mat->descriptorSet != VK_NULL_HANDLE ? mat->descriptorSet : renderer.getDefaultTextureSet()
+                };
 
-            // --- Bind vertex buffers
-            VkBuffer vertexBuffers[] = { mesh->vertexBuffer };
-            VkDeviceSize vertexOffsets[] = { 0 };
-            vkCmdBindVertexBuffers(cmd, 0, 1, vertexBuffers, vertexOffsets);
+                vkCmdBindDescriptorSets(cmd,
+                    VK_PIPELINE_BIND_POINT_GRAPHICS,
+                    mat->pipelineLayout,
+                    0,
+                    2,
+                    descriptorSets,
+                    0,
+                    nullptr);
+            }
 
-            // If you still have an instance buffer bound elsewhere, it's harmless,
-            // but we don't rely on it here because shader uses push.model.
-            // vkCmdBindVertexBuffers(cmd, 1, 1, &renderer.instanceBuffer.get(), offsets);
+            if (mesh != currentMesh) {
+                currentMesh = mesh;
 
-            // --- Bind index buffer
-            vkCmdBindIndexBuffer(cmd, mesh->indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+                VkBuffer vertexBuffers[] = { mesh->vertexBuffer };
+                VkDeviceSize vertexOffsets[] = { 0 };
+                vkCmdBindVertexBuffers(cmd, 0, 1, vertexBuffers, vertexOffsets);
+                vkCmdBindIndexBuffer(cmd, mesh->indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+            }
 
-            // Draw each instance in this batch individually, pushing its model/color
-            for (auto& [e, instanceIdx] : batch) {
-                // Bind Joint Descriptor Set (Set 2) if entity (or parent) has a Skeleton component
-                SkeletonComponent* skeleton = registry.get<SkeletonComponent>(e);
-                if (!skeleton) {
-                    if (auto* hierarchy = registry.get<HierarchyComponent>(e)) {
-                        if (hierarchy->parent.getId() != Entity::INVALID_ENTITY && registry.isValid(hierarchy->parent)) {
-                            skeleton = registry.get<SkeletonComponent>(hierarchy->parent);
-                        }
+            // Bind Joint Descriptor Set (Set 2) if entity (or parent) has a Skeleton component
+            SkeletonComponent* skeleton = registry.get<SkeletonComponent>(dc.entity);
+            if (!skeleton) {
+                if (auto* hierarchy = registry.get<HierarchyComponent>(dc.entity)) {
+                    if (hierarchy->parent.getId() != Entity::INVALID_ENTITY && registry.isValid(hierarchy->parent)) {
+                        skeleton = registry.get<SkeletonComponent>(hierarchy->parent);
                     }
                 }
-
-                if (skeleton && skeleton->descriptorSet != VK_NULL_HANDLE) {
-                    vkCmdBindDescriptorSets(cmd,
-                        VK_PIPELINE_BIND_POINT_GRAPHICS,
-                        mat->pipelineLayout,
-                        2, // Set 2
-                        1,
-                        &skeleton->descriptorSet,
-                        0,
-                        nullptr);
-                }
-
-                // read instance data from renderer.instanceDataCPU
-                const InstanceDataGPU& inst = renderer.instanceDataCPU.get(instanceIdx);
-
-                PushConstants pc{};
-                pc.model = inst.model;
-                pc.color = inst.color;
-                pc.camPos = glm::vec4(getCameraPosition(), 1.0f);
-                if (renderer.hasActiveCamera()) {
-                    pc.viewProj = renderer.getActiveCameraViewProj();
-                } else {
-                    pc.viewProj = glm::mat4(1.0f);
-                }
-                pc.scale = mat ? mat->roughness : 0.5f;
-                pc.fade = mat ? mat->metallic : 0.0f;
-
-                vkCmdPushConstants(cmd,
-                    mat->pipelineLayout,
-                    VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                    0,
-                    sizeof(PushConstants),
-                    &pc);
-
-                // Draw one instance
-                vkCmdDrawIndexed(cmd,
-                    static_cast<uint32_t>(mesh->indices.size()),
-                    1, // instance count = 1 because we handle instances manually
-                    0,  // firstIndex
-                    0,  // vertexOffset
-                    0); // firstInstance
             }
+
+            if (skeleton && skeleton->descriptorSet != VK_NULL_HANDLE) {
+                vkCmdBindDescriptorSets(cmd,
+                    VK_PIPELINE_BIND_POINT_GRAPHICS,
+                    mat->pipelineLayout,
+                    2, // Set 2
+                    1,
+                    &skeleton->descriptorSet,
+                    0,
+                    nullptr);
+            }
+
+            // Read instance data from renderer.instanceDataCPU
+            const InstanceDataGPU& inst = renderer.instanceDataCPU.get(dc.instanceIdx);
+
+            PushConstants pc{};
+            pc.model = inst.model;
+            pc.color = inst.color;
+            pc.camPos = glm::vec4(getCameraPosition(), 1.0f);
+            if (renderer.hasActiveCamera()) {
+                pc.viewProj = renderer.getActiveCameraViewProj();
+            } else {
+                pc.viewProj = glm::mat4(1.0f);
+            }
+            pc.scale = mat ? mat->roughness : 0.5f;
+            pc.fade = mat ? mat->metallic : 0.0f;
+
+            vkCmdPushConstants(cmd,
+                mat->pipelineLayout,
+                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                0,
+                sizeof(PushConstants),
+                &pc);
+
+            // Draw instance
+            vkCmdDrawIndexed(cmd,
+                static_cast<uint32_t>(mesh->indices.size()),
+                1,
+                0,
+                0,
+                0);
         }
     }
 

@@ -51,8 +51,37 @@ void Scene::unload() {
  * @return True if successful, false otherwise.
  */
 bool Scene::saveToFile(const std::string& path) {
+    // 1. Purge invalid or EditorCamera entities from ownedEntities
+    ownedEntities.erase(
+        std::remove_if(ownedEntities.begin(), ownedEntities.end(),
+            [this](Entity e) {
+                return !registry.isValid(e) || registry.has<EditorCamera>(e);
+            }),
+        ownedEntities.end()
+    );
+
+    // 2. Discover any untracked valid scene entities in the registry (excluding EditorCamera)
+    for (auto [e, name] : registry.view<Name>()) {
+        if (registry.isValid(e) && !registry.has<EditorCamera>(e) && std::find(ownedEntities.begin(), ownedEntities.end(), e) == ownedEntities.end()) {
+            ownedEntities.push_back(e);
+        }
+    }
+    for (auto [e, transform] : registry.view<Transform>()) {
+        if (registry.isValid(e) && !registry.has<EditorCamera>(e) && std::find(ownedEntities.begin(), ownedEntities.end(), e) == ownedEntities.end()) {
+            ownedEntities.push_back(e);
+        }
+    }
+
+    // 3. Filter list sent to serializer to guarantee EditorCamera is never written
+    std::vector<Entity> entitiesToSerialize;
+    for (Entity e : ownedEntities) {
+        if (registry.isValid(e) && !registry.has<EditorCamera>(e)) {
+            entitiesToSerialize.push_back(e);
+        }
+    }
+
     SceneSerializer serializer(registry, renderer);
-    return serializer.serialize(path, ownedEntities);
+    return serializer.serialize(path, entitiesToSerialize);
 }
 
 /**
@@ -314,7 +343,11 @@ Entity Scene::instantiatePrefab(const std::string& prefabPath, const glm::vec3& 
  * @return Tracked entity.
  */
 Entity Scene::trackEntity(Entity entity) {
-    ownedEntities.push_back(entity);
+    if (registry.isValid(entity) && !registry.has<EditorCamera>(entity)) {
+        if (std::find(ownedEntities.begin(), ownedEntities.end(), entity) == ownedEntities.end()) {
+            ownedEntities.push_back(entity);
+        }
+    }
     return entity;
 }
 

@@ -46,6 +46,25 @@ public:
     }
 
     /**
+     * @brief Triggers the editor update routine on all registered systems during Edit mode.
+     * @param dt Delta time in seconds.
+     */
+    void updateEditorAll(float dt) {
+        for (auto& system : systems) {
+            system->onEditorUpdate(dt);
+        }
+    }
+
+    /**
+     * @brief Notifies all systems that a scene load has completed in the editor.
+     */
+    void notifySceneLoadedAll() {
+        for (auto& system : systems) {
+            system->onSceneLoaded();
+        }
+    }
+
+    /**
      * @brief Triggers debug rendering on all registered systems.
      * Called during the ImGui rendering phase.
      */

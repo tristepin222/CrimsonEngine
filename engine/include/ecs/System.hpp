@@ -27,6 +27,22 @@ public:
      * Called during the ImGui rendering phase.
      */
     virtual void renderDebugUI() {}
+
+    /**
+     * @brief Called once when system initializes in editor mode.
+     */
+    virtual void onEditorStart() {}
+
+    /**
+     * @brief Called every frame when the editor is in Edit mode (!editorMode.isPlaying).
+     * @param dt Delta time in seconds.
+     */
+    virtual void onEditorUpdate(float dt) {}
+
+    /**
+     * @brief Called when a scene finishes loading/deserializing in the editor.
+     */
+    virtual void onSceneLoaded() {}
     
     /**
      * @brief Adds an entity to the system tracking list.

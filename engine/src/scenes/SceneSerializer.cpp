@@ -894,7 +894,7 @@ static bool registerBuiltinComponents() {
 
                 // Colour
                 float col[4] = { 1.f, 1.f, 1.f, 1.f };
-                if (JSONUtils::extractFloatArray(json, "sprColor", col, 4)) {
+                if (JSONUtils::extractFloatArray(json, "sprColor", col, 4) || JSONUtils::extractFloatArray(json, "color", col, 4)) {
                     spr->color = { col[0], col[1], col[2], col[3] };
                 }
 

@@ -87,6 +87,7 @@ namespace Engine {
         // [ReflectField]
         glm::vec4 padding{5.0f, 5.0f, 5.0f, 5.0f}; // Top, Right, Bottom, Left
         GridConstraint constraint = GridConstraint::FixedColumnCount;
+        // [ReflectField]
         int constraintCount = 3; // Max columns or max rows depending on constraint
     };
 

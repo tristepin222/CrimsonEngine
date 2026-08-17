@@ -354,4 +354,20 @@ private:
     BuildGameCallback buildGameCallback;
     /** @brief Optional callback used to compile user scripts while the editor is running. */
     CompileScriptsCallback compileScriptsCallback;
+
+    /** @brief Renders the top modern editor toolbar. */
+    void drawToolbar();
+
+    /** @brief Active ImGuizmo operation: 0 = Translate, 1 = Rotate, 2 = Scale. */
+    int gizmoOperation = 0;
+    /** @brief Active ImGuizmo mode: 0 = World, 1 = Local. */
+    int gizmoMode = 0;
+    /** @brief Toggle grid snapping. */
+    bool useSnap = false;
+    /** @brief Translation grid snap step. */
+    float snapTranslation = 0.5f;
+    /** @brief Rotation grid snap step (degrees). */
+    float snapRotation = 15.0f;
+    /** @brief Scale grid snap step. */
+    float snapScale = 0.1f;
 };

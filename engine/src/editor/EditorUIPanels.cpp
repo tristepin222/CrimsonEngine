@@ -25,6 +25,7 @@
 #include "ecs/components/Skeleton.hpp"
 #include "ecs/components/Animator.hpp"
 #include "ecs/components/Hierarchy.hpp"
+#include "ecs/EntityCloner.hpp"
 
 namespace {
     inline bool isPrefabFile(const std::string& pathStr) {
@@ -193,6 +194,96 @@ void EditorUI::drawPanels() {
             }
             ImGui::EndMenu();
         }
+        if (ImGui::BeginMenu("Edit")) {
+            if (ImGui::MenuItem("Duplicate Entity", "Ctrl+D", false, hasSelection)) {
+                if (hasSelection && registry.isValid(selectedEntity)) {
+                    Entity duplicated = EntityCloner::clone(registry, renderer, selectedEntity);
+                    if (duplicated.getId() != Entity::INVALID_ENTITY) {
+                        selectedEntity = duplicated;
+                        hasSelection = true;
+                        if (auto* name = registry.get<Name>(duplicated)) renameBuffer = name->value;
+                        statusMessage = "Duplicated entity hierarchy.";
+                    }
+                }
+            }
+            if (ImGui::MenuItem("Delete Entity", "Delete", false, hasSelection)) {
+                if (hasSelection && registry.isValid(selectedEntity)) {
+                    std::vector<Entity> toDelete;
+                    std::function<void(Entity)> collectChildren = [&](Entity parent) {
+                        toDelete.push_back(parent);
+                        for (auto [e, hierarchy] : registry.view<HierarchyComponent>()) {
+                            if (hierarchy.parent == parent && e != parent && registry.isValid(e)) {
+                                collectChildren(e);
+                            }
+                        }
+                    };
+                    collectChildren(selectedEntity);
+                    for (Entity e : toDelete) {
+                        if (registry.isValid(e)) registry.destroy(e);
+                    }
+                    hasSelection = false;
+                    selectedEntity = Entity();
+                    statusMessage = "Deleted entity hierarchy.";
+                }
+            }
+            ImGui::EndMenu();
+        }
+
+        ImGui::Separator();
+
+        // Gizmo Mode Buttons
+        auto pushActiveStyle = [](bool active) {
+            if (active) {
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.18f, 0.45f, 0.75f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.25f, 0.55f, 0.85f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.12f, 0.38f, 0.65f, 1.0f));
+            } else {
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.18f, 0.18f, 0.22f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.26f, 0.26f, 0.32f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.14f, 0.14f, 0.18f, 1.0f));
+            }
+        };
+
+        pushActiveStyle(gizmoOperation == 0);
+        if (ImGui::Button("Move [W]")) gizmoOperation = 0;
+        ImGui::PopStyleColor(3);
+        ImGui::SameLine();
+
+        pushActiveStyle(gizmoOperation == 1);
+        if (ImGui::Button("Rotate [E]")) gizmoOperation = 1;
+        ImGui::PopStyleColor(3);
+        ImGui::SameLine();
+
+        pushActiveStyle(gizmoOperation == 2);
+        if (ImGui::Button("Scale [R]")) gizmoOperation = 2;
+        ImGui::PopStyleColor(3);
+
+        ImGui::Separator();
+
+        // Gizmo Space
+        if (ImGui::Button(gizmoMode == 0 ? "Space: World" : "Space: Local")) {
+            gizmoMode = (gizmoMode == 0) ? 1 : 0;
+        }
+
+        ImGui::Separator();
+
+        // Grid Snap Toggle & Values
+        pushActiveStyle(useSnap);
+        if (ImGui::Button(useSnap ? "Snap: ON" : "Snap: OFF")) {
+            useSnap = !useSnap;
+        }
+        ImGui::PopStyleColor(3);
+
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(50.0f);
+        if (gizmoOperation == 0) {
+            ImGui::DragFloat("##snapT", &snapTranslation, 0.1f, 0.05f, 10.0f, "%.2fm");
+        } else if (gizmoOperation == 1) {
+            ImGui::DragFloat("##snapR", &snapRotation, 1.0f, 1.0f, 90.0f, "%.0f°");
+        } else {
+            ImGui::DragFloat("##snapS", &snapScale, 0.05f, 0.01f, 2.0f, "%.2fx");
+        }
+
         // Center-aligned Play / Stop buttons in the Main Menu Bar
         float menuBarWidth = ImGui::GetWindowWidth();
         float buttonGroupWidth = 80.0f; // estimated width
@@ -219,6 +310,45 @@ void EditorUI::drawPanels() {
         }
 
         ImGui::EndMainMenuBar();
+    }
+
+    // Process Safe Keyboard Shortcuts
+    ImGuiIO& activeIO = ImGui::GetIO();
+    if (!activeIO.WantCaptureKeyboard && !editorMode.flyMode) {
+        if (ImGui::IsKeyPressed(ImGuiKey_W)) gizmoOperation = 0;
+        if (ImGui::IsKeyPressed(ImGuiKey_E)) gizmoOperation = 1;
+        if (ImGui::IsKeyPressed(ImGuiKey_R)) gizmoOperation = 2;
+        if (ImGui::IsKeyDown(ImGuiKey_LeftCtrl) && ImGui::IsKeyPressed(ImGuiKey_D)) {
+            if (hasSelection && registry.isValid(selectedEntity)) {
+                Entity duplicated = EntityCloner::clone(registry, renderer, selectedEntity);
+                if (duplicated.getId() != Entity::INVALID_ENTITY) {
+                    selectedEntity = duplicated;
+                    hasSelection = true;
+                    if (auto* name = registry.get<Name>(duplicated)) renameBuffer = name->value;
+                    statusMessage = "Duplicated entity hierarchy.";
+                }
+            }
+        }
+        if (ImGui::IsKeyPressed(ImGuiKey_Delete)) {
+            if (hasSelection && registry.isValid(selectedEntity)) {
+                std::vector<Entity> toDelete;
+                std::function<void(Entity)> collectChildren = [&](Entity parent) {
+                    toDelete.push_back(parent);
+                    for (auto [e, hierarchy] : registry.view<HierarchyComponent>()) {
+                        if (hierarchy.parent == parent && e != parent && registry.isValid(e)) {
+                            collectChildren(e);
+                        }
+                    }
+                };
+                collectChildren(selectedEntity);
+                for (Entity e : toDelete) {
+                    if (registry.isValid(e)) registry.destroy(e);
+                }
+                hasSelection = false;
+                selectedEntity = Entity();
+                statusMessage = "Deleted selected entity and hierarchy.";
+            }
+        }
     }
 
     // Fallback if MainMenuBar is not showing

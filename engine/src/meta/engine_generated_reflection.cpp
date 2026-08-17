@@ -473,7 +473,8 @@ PLUGIN_API void registerEngineReflection() {
         refl.fields = {
             { "cellSize", Engine::FieldType::Vec2, offsetof(Engine::UIGridLayoutGroupComponent, cellSize) },
             { "spacing", Engine::FieldType::Vec2, offsetof(Engine::UIGridLayoutGroupComponent, spacing) },
-            { "padding", Engine::FieldType::Vec4, offsetof(Engine::UIGridLayoutGroupComponent, padding) }
+            { "padding", Engine::FieldType::Vec4, offsetof(Engine::UIGridLayoutGroupComponent, padding) },
+            { "constraintCount", Engine::FieldType::Int, offsetof(Engine::UIGridLayoutGroupComponent, constraintCount) }
         };
         refl.add = [](Registry& reg, Entity e) { reg.emplace<Engine::UIGridLayoutGroupComponent>(e, Engine::UIGridLayoutGroupComponent{}); };
         refl.has = [](Registry& reg, Entity e) { return reg.has<Engine::UIGridLayoutGroupComponent>(e); };

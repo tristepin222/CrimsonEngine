@@ -152,6 +152,9 @@ namespace Engine {
 
         sceneManager.setContext(&registry, renderer.get());
         SceneManagement::setSceneManager(&sceneManager);
+        sceneManager.onSceneLoadedCallback = [this](const SceneInfo& info) {
+            systemManager.notifySceneLoadedAll();
+        };
         sceneManager.changeScene(std::make_unique<DefaultScene>(registry, *renderer, config.startScenePath));
 
         running = true;
@@ -591,6 +594,9 @@ namespace Engine {
             // Tick scenes and ECS systems
             sceneManager.update(dt);
             systemManager.updateAll(dt);
+            if (!editorMode.isPlaying && config.enableEditor) {
+                systemManager.updateEditorAll(dt);
+            }
 
             if (uiSystem) {
                 uiSystem->setEditorActive(config.enableEditor);
