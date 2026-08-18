@@ -42,8 +42,17 @@ public:
      */
     void updateAll(float dt) {
         for (auto& system : systems) {
-            PROFILE_SYSTEM(system->getName());
-            system->update(dt);
+            std::string name = system->getName();
+            if (name.find("Render") != std::string::npos) {
+                PROFILE_RENDERING(name);
+                system->update(dt);
+            } else if (name.find("Physics") != std::string::npos) {
+                PROFILE_PHYSICS(name);
+                system->update(dt);
+            } else {
+                PROFILE_SYSTEM(name);
+                system->update(dt);
+            }
         }
     }
 
@@ -53,8 +62,17 @@ public:
      */
     void updateEditorAll(float dt) {
         for (auto& system : systems) {
-            PROFILE_SYSTEM(system->getName());
-            system->onEditorUpdate(dt);
+            std::string name = system->getName();
+            if (name.find("Render") != std::string::npos) {
+                PROFILE_RENDERING(name);
+                system->onEditorUpdate(dt);
+            } else if (name.find("Physics") != std::string::npos) {
+                PROFILE_PHYSICS(name);
+                system->onEditorUpdate(dt);
+            } else {
+                PROFILE_SYSTEM(name);
+                system->onEditorUpdate(dt);
+            }
         }
     }
 

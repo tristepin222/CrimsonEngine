@@ -93,7 +93,7 @@ public:
      * @return True if valid and handle generation matches, false otherwise.
      */
     bool isValid(Entity e) const {
-        PROFILE_SCOPE("Registry::isValid");
+        PROFILE_ECS("Registry::isValid");
         return entities.isValid(e);
     }
 

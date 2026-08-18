@@ -110,7 +110,9 @@ target_link_libraries(engine PUBLIC
     Vulkan::Vulkan
     imgui
     imguizmo
+    Tracy::TracyClient
 )
+target_compile_definitions(engine PUBLIC TRACY_ENABLE TRACY_ON_DEMAND)
 
 # --- Builtin Shaders Compilation ---
 # Compile grid.vert, grid.frag, unlit.vert, unlit.frag into SPIR-V.

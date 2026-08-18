@@ -27,16 +27,42 @@ namespace Engine {
         if (m_isPaused) return;
 
         auto now = std::chrono::high_resolution_clock::now();
-        double frameTimeMs = std::chrono::duration<double, std::milli>(now - m_frameStartTime).count();
+        double frameDurationMs = std::chrono::duration<double, std::milli>(now - m_frameStartTime).count();
 
         std::lock_guard<std::mutex> lock(m_mutex);
-        m_activeFrame.frameTimeMs = frameTimeMs;
-        m_activeFrame.fps = (frameTimeMs > 0.0) ? static_cast<float>(1000.0 / frameTimeMs) : 0.0f;
+        m_activeFrame.frameTimeMs = frameDurationMs;
+        m_activeFrame.fps = (frameDurationMs > 0.0) ? static_cast<float>(1000.0 / frameDurationMs) : 0.0f;
+
+        m_activeFrame.renderingMs = 0.0;
+        m_activeFrame.physicsMs = 0.0;
+        m_activeFrame.systemsMs = 0.0;
+        m_activeFrame.ecsCoreMs = 0.0;
+        m_activeFrame.editorUiMs = 0.0;
+        m_activeFrame.customMs = 0.0;
+
+        for (const auto& sample : m_activeFrame.systemSamples) {
+            m_activeFrame.systemsMs += sample.durationMs;
+        }
+
+        for (const auto& sample : m_activeFrame.customSamples) {
+            switch (sample.category) {
+                case ProfileCategory::Rendering: m_activeFrame.renderingMs += sample.durationMs; break;
+                case ProfileCategory::Physics:   m_activeFrame.physicsMs += sample.durationMs; break;
+                case ProfileCategory::Systems:   m_activeFrame.systemsMs += sample.durationMs; break;
+                case ProfileCategory::ECS_Core:  m_activeFrame.ecsCoreMs += sample.durationMs; break;
+                case ProfileCategory::Editor_UI: m_activeFrame.editorUiMs += sample.durationMs; break;
+                default:                         m_activeFrame.customMs += sample.durationMs; break;
+            }
+        }
 
         m_frameHistory.push_back(m_activeFrame);
         if (m_frameHistory.size() > m_maxHistorySize) {
             m_frameHistory.pop_front();
         }
+
+#if defined(TRACY_ENABLE)
+        FrameMark;
+#endif
 
         recalculateAggregates();
     }
@@ -52,10 +78,10 @@ namespace Engine {
                 return;
             }
         }
-        m_activeFrame.systemSamples.push_back({ systemName, durationMs, 1 });
+        m_activeFrame.systemSamples.push_back({ systemName, durationMs, 1, ProfileCategory::Systems });
     }
 
-    void Profiler::recordCustomSample(const std::string& scopeName, double durationMs) {
+    void Profiler::recordCustomSample(const std::string& scopeName, double durationMs, ProfileCategory category) {
         if (m_isPaused) return;
 
         std::lock_guard<std::mutex> lock(m_mutex);
@@ -66,7 +92,7 @@ namespace Engine {
                 return;
             }
         }
-        m_activeFrame.customSamples.push_back({ scopeName, durationMs, 1 });
+        m_activeFrame.customSamples.push_back({ scopeName, durationMs, 1, category });
     }
 
     void Profiler::updateRenderStats(const RenderStats& stats) {
@@ -79,6 +105,7 @@ namespace Engine {
     void Profiler::clearHistory() {
         std::lock_guard<std::mutex> lock(m_mutex);
         m_frameHistory.clear();
+        m_selectedFrameIdx = -1;
         m_avgFrameTimeMs = 0.0;
         m_minFrameTimeMs = 0.0;
         m_maxFrameTimeMs = 0.0;
@@ -89,6 +116,9 @@ namespace Engine {
         std::lock_guard<std::mutex> lock(m_mutex);
         if (m_frameHistory.empty()) {
             return FrameProfileData{};
+        }
+        if (m_selectedFrameIdx >= 0 && static_cast<size_t>(m_selectedFrameIdx) < m_frameHistory.size()) {
+            return m_frameHistory[m_selectedFrameIdx];
         }
         return m_frameHistory.back();
     }
@@ -139,12 +169,14 @@ namespace Engine {
         std::unordered_map<std::string, std::vector<double>> functionDurations;
         std::unordered_map<std::string, std::vector<uint32_t>> functionCalls;
         std::unordered_map<std::string, double> latestDurations;
+        std::unordered_map<std::string, ProfileCategory> categories;
 
         for (const auto& frame : m_frameHistory) {
             for (const auto& sample : frame.customSamples) {
                 functionDurations[sample.name].push_back(sample.durationMs);
                 functionCalls[sample.name].push_back(sample.calls);
                 latestDurations[sample.name] = sample.durationMs;
+                categories[sample.name] = sample.category;
             }
         }
 
@@ -167,7 +199,7 @@ namespace Engine {
             uint32_t sumCalls = std::accumulate(callsVec.begin(), callsVec.end(), 0u);
             uint32_t avgCalls = static_cast<uint32_t>(sumCalls / callsVec.size());
 
-            result.push_back({ name, avgCalls, lastVal, avg, minVal, maxVal, percent });
+            result.push_back({ name, avgCalls, lastVal, avg, minVal, maxVal, percent, categories[name] });
         }
 
         std::sort(result.begin(), result.end(), [](const FunctionStats& a, const FunctionStats& b) {

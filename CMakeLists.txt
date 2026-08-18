@@ -75,6 +75,17 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(miniaudio)
 
+# Fetch Tracy Profiler (v0.14)
+FetchContent_Declare(
+    tracy
+    GIT_REPOSITORY https://github.com/wolfpld/tracy.git
+    GIT_TAG v0.14.0
+    GIT_SHALLOW TRUE
+)
+set(TRACY_ENABLE ON CACHE BOOL "Enable Tracy Profiler" FORCE)
+set(TRACY_ON_DEMAND ON CACHE BOOL "On-demand Tracy profiling" FORCE)
+FetchContent_MakeAvailable(tracy)
+
 # --- Add Subdirectories ---
 # sandbox_game is now a standalone project — build it with build_game.bat
 add_subdirectory(engine)

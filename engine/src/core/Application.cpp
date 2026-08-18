@@ -617,14 +617,20 @@ namespace Engine {
                     }
 
                     // Draw ImGui editor panels second (menu bar, inspector, floating editor windows)
-                    editorUI->drawPanels();
+                    {
+                        PROFILE_EDITOR_UI("EditorUI::drawPanels");
+                        editorUI->drawPanels();
+                    }
 
                     // Draw active system debug overlays (e.g. AStar path debug lines)
                     systemManager.renderDebugAll();
 
-                    renderSystem->drawFrame([this](VkCommandBuffer cmd) {
-                        editorUI->render(cmd);
-                    });
+                    {
+                        PROFILE_RENDERING("RenderSystem::drawFrame");
+                        renderSystem->drawFrame([this](VkCommandBuffer cmd) {
+                            editorUI->render(cmd);
+                        });
+                    }
                 } else {
                     // Standalone mode: draw viewport and Game UI fullscreen
                     editorUI->beginFrame();
