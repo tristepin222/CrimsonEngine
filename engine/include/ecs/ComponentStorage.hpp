@@ -1,7 +1,8 @@
 #pragma once
 #include "Entity.hpp"
 #include <vector>
-#include <unordered_map>
+#include <array>
+#include <cstdint>
 #include <stdexcept>
 
 // Base interface
@@ -34,57 +35,72 @@ struct IStorage {
 
 /**
  * @class ComponentStorage
- * @brief Template class storing components contiguously in memory for optimal cache usage.
+ * @brief High-performance Sparse Set component storage with contiguous memory layout and O(1) lookups.
  * @tparam T Type of component being stored.
  */
 template<typename T>
 class ComponentStorage : public IStorage {
 public:
+    static constexpr std::uint32_t MAX_ENTITIES = 10000;
+    static constexpr std::uint32_t INVALID_INDEX = 0xFFFFFFFF;
+
+    ComponentStorage() {
+        sparse.fill(INVALID_INDEX);
+    }
+
     /**
-     * @brief Adds a component to an entity.
+     * @brief Adds or replaces a component on an entity.
      * @param e The target entity.
      * @param comp The component instance.
      */
     void add(Entity e, T comp) {
-        auto it = entityToIndex.find(e);
-        if (it != entityToIndex.end()) {
-            data[it->second] = std::move(comp);
+        std::uint32_t id = e.getId();
+        if (id >= MAX_ENTITIES) return;
+
+        std::uint32_t denseIdx = sparse[id];
+        if (denseIdx != INVALID_INDEX) {
+            data[denseIdx] = std::move(comp);
+            entities[denseIdx] = e;
             return;
         }
+
+        denseIdx = static_cast<std::uint32_t>(data.size());
+        sparse[id] = denseIdx;
         entities.push_back(e);
         data.push_back(std::move(comp));
-        entityToIndex[e] = data.size() - 1;
     }
 
-
     /**
-     * @brief Checks if an entity possesses this component.
+     * @brief Direct O(1) array lookup checking if an entity possesses this component.
      * @param e The entity to check.
-     * @return True if the component exists, false otherwise.
+     * @return True if component exists, false otherwise.
      */
     bool has(Entity e) const {
-        return entityToIndex.find(e) != entityToIndex.end();
+        std::uint32_t id = e.getId();
+        return id < MAX_ENTITIES && sparse[id] != INVALID_INDEX && entities[sparse[id]] == e;
     }
 
     /**
-     * @brief Removes the component from an entity.
+     * @brief Removes the component from an entity using swap-removal.
      * @param e The entity to remove.
      */
     void remove(Entity e) {
-        auto it = entityToIndex.find(e);
-        if (it == entityToIndex.end()) return;
+        std::uint32_t id = e.getId();
+        if (id >= MAX_ENTITIES || sparse[id] == INVALID_INDEX) return;
 
-        size_t index = it->second;
-        size_t last = data.size() - 1;
+        std::uint32_t index = sparse[id];
+        std::uint32_t last = static_cast<std::uint32_t>(data.size() - 1);
 
-        // swap-remove
-        data[index] = data[last];
-        entities[index] = entities[last];
-        entityToIndex[entities[index]] = index;
+        if (index != last) {
+            // Swap-remove to preserve contiguous dense layout
+            data[index] = std::move(data[last]);
+            entities[index] = entities[last];
+            sparse[entities[index].getId()] = index;
+        }
 
         data.pop_back();
         entities.pop_back();
-        entityToIndex.erase(e);
+        sparse[id] = INVALID_INDEX;
     }
 
     /**
@@ -96,14 +112,16 @@ public:
     }
 
     /**
-     * @brief Retrieves the component associated with an entity.
+     * @brief Retrieves reference to component associated with an entity.
      * @param e The target entity.
-     * @return Reference to the component instance.
+     * @return Reference to component instance.
      */
     T& get(Entity e) {
-        auto it = entityToIndex.find(e);
-        if (it == entityToIndex.end()) throw std::runtime_error("Component not found");
-        return data[it->second];
+        std::uint32_t id = e.getId();
+        if (id >= MAX_ENTITIES || sparse[id] == INVALID_INDEX) {
+            throw std::runtime_error("Component missing for target entity!");
+        }
+        return data[sparse[id]];
     }
 
     /**
@@ -120,32 +138,16 @@ public:
      */
     size_t size() const override { return data.size(); }
 
-    /**
-     * @brief Gets start iterator of stored component data.
-     * @return Iterator.
-     */
     auto begin() { return data.begin(); }
-    /**
-     * @brief Gets end iterator of stored component data.
-     * @return Iterator.
-     */
     auto end() { return data.end(); }
-    /**
-     * @brief Gets start iterator of stored entity list.
-     * @return Iterator.
-     */
     auto entityBegin() { return entities.begin(); }
-    /**
-     * @brief Gets end iterator of stored entity list.
-     * @return Iterator.
-     */
     auto entityEnd() { return entities.end(); }
 
 private:
     /** @brief Contiguous array of component instances. */
-    std::vector<T> data;                // contiguous component data
-    /** @brief Entity mapping matching data array order. */
-    std::vector<Entity> entities;       // entities aligned with data
-    /** @brief Mapping for quick entity component lookup. */
-    std::unordered_map<Entity, size_t> entityToIndex; // fast lookup
+    std::vector<T> data;
+    /** @brief Dense array of entities matching data vector order. */
+    std::vector<Entity> entities;
+    /** @brief Fixed-size sparse array mapping Entity ID -> Dense index for O(1) access. */
+    std::array<std::uint32_t, MAX_ENTITIES> sparse;
 };

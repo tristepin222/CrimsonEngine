@@ -51,17 +51,17 @@ public:
      * @param e Entity to destroy.
      */
     void destroy(Entity e) {
-        if (e.getId() == Entity::INVALID_ENTITY) {
+        if (!entities.isValid(e)) {
             return;
         }
 
         ComponentMask mask = entities.getMask(e);
-        for (auto& [id, storage] : storages) {
-            if (!mask.test(id)) {
+        for (std::size_t id = 0; id < MAX_COMPONENTS; ++id) {
+            if (!mask.test(id) || !storages[id]) {
                 continue;
             }
 
-            storage->removeEntity(e);
+            storages[id]->removeEntity(e);
 
             auto callbacksIt = componentRemovedCallbacks.find(id);
             if (callbacksIt != componentRemovedCallbacks.end()) {
@@ -82,19 +82,26 @@ public:
         for (auto id : aliveCopy) {
             destroy(Entity(id));
         }
-        storages.clear();
+        for (auto& s : storages) {
+            s.reset();
+        }
     }
 
     /**
      * @brief Checks if an entity is alive and valid.
      * @param e Entity to check.
-     * @return True if valid, false otherwise.
+     * @return True if valid and handle generation matches, false otherwise.
      */
     bool isValid(Entity e) const {
         PROFILE_SCOPE("Registry::isValid");
-        if (e.getId() == Entity::INVALID_ENTITY) return false;
-        const auto& alive = entities.getAlive();
-        return std::find(alive.begin(), alive.end(), e.getId()) != alive.end();
+        return entities.isValid(e);
+    }
+
+    /**
+     * @brief Exposes the component mask for a given entity.
+     */
+    ComponentMask& getMask(Entity e) {
+        return entities.getMask(e);
     }
 
     /**
@@ -116,7 +123,7 @@ public:
         ensureStorage<T>();
         getStorage<T>()->add(e, std::forward<T>(comp));
 
-        auto id = registerComponentType(typeid(T));
+        auto id = getComponentTypeId<T>();
         entities.getMask(e).set(id);
 
         if (componentAddedCallbacks.find(id) != componentAddedCallbacks.end()) {
@@ -131,9 +138,6 @@ public:
      */
     template<typename T>
     T& emplace_or_replace(Entity e, T&& comp) {
-        if (has<T>(e)) {
-            remove<T>(e);
-        }
         return emplace<T>(e, std::forward<T>(comp));
     }
 
@@ -147,7 +151,7 @@ public:
         auto* storage = getStorage<T>();
         if (storage && storage->has(e)) {
             storage->remove(e);
-            auto id = registerComponentType(typeid(T));
+            auto id = getComponentTypeId<T>();
             entities.getMask(e).reset(id);
 
             if (componentRemovedCallbacks.find(id) != componentRemovedCallbacks.end()) {
@@ -189,9 +193,10 @@ public:
      * @return True if component exists, false otherwise.
      */
     template<typename T>
-    bool has(Entity e) {
-        auto* storage = getStorage<T>();
-        return storage && storage->has(e);
+    bool has(Entity e) const {
+        std::size_t id = getComponentTypeId<T>();
+        if (id >= MAX_COMPONENTS || !storages[id]) return false;
+        return static_cast<ComponentStorage<T>*>(storages[id].get())->has(e);
     }
 
     /**
@@ -201,7 +206,7 @@ public:
      */
     template<typename T>
     void subscribeToAdded(ComponentAddedCallback cb) {
-        auto id = registerComponentType(typeid(T));
+        auto id = getComponentTypeId<T>();
         componentAddedCallbacks[id].push_back(cb);
     }
 
@@ -212,13 +217,13 @@ public:
      */
     template<typename T>
     void subscribeToRemoved(ComponentRemovedCallback cb) {
-        auto id = registerComponentType(typeid(T));
+        auto id = getComponentTypeId<T>();
         componentRemovedCallbacks[id].push_back(cb);
     }
 
     /**
      * @class View
-     * @brief Zero-allocation filtered view over entities containing a specific set of components.
+     * @brief Bitmask-accelerated zero-allocation filtered view over entities.
      * @tparam Components Component filter list.
      */
     template<typename... Components>
@@ -228,24 +233,29 @@ public:
          * @brief Construct a new View object.
          * @param reg Registry creating this view.
          * @param sm Smallest storage containing entities to filter.
+         * @param targetMask Bitmask of required components.
          */
-        View(Registry& reg, IStorage* sm) : registry(reg), smallest(sm) {}
+        View(Registry& reg, IStorage* sm, ComponentMask targetMask)
+            : registry(reg), smallest(sm), mask(targetMask) {}
 
         /**
          * @struct Iterator
-         * @brief Iterator over the entities matching the View filters.
+         * @brief Bitmask-accelerated iterator over matching entities.
          */
         struct Iterator {
             Registry& registry;
             const std::vector<Entity>& entities;
             size_t index;
+            ComponentMask mask;
 
-            /** @brief Helper to advance iterator to next matching entity. */
+            /** @brief Helper to advance iterator to next matching entity using bitwise &. */
             void advance() {
                 while (index < entities.size()) {
                     Entity e = entities[index];
-                    if (e.getId() != Entity::INVALID_ENTITY && (registry.has<Components>(e) && ...)) {
-                        break;
+                    if (e.getId() != Entity::INVALID_ENTITY && registry.isValid(e)) {
+                        if ((registry.getMask(e) & mask) == mask) {
+                            break;
+                        }
                     }
                     index++;
                 }
@@ -273,7 +283,7 @@ public:
         /** @brief Returns beginning view iterator. */
         Iterator begin() {
             if (!smallest) return end();
-            Iterator it{ registry, smallest->getEntities(), 0 };
+            Iterator it{ registry, smallest->getEntities(), 0, mask };
             it.advance();
             return it;
         }
@@ -282,12 +292,13 @@ public:
         Iterator end() {
             static const std::vector<Entity> empty;
             const std::vector<Entity>& ents = smallest ? smallest->getEntities() : empty;
-            return Iterator{ registry, ents, ents.size() };
+            return Iterator{ registry, ents, ents.size(), mask };
         }
 
     private:
         Registry& registry;
         IStorage* smallest;
+        ComponentMask mask;
     };
 
     /**
@@ -299,18 +310,29 @@ public:
     auto view() {
         ensureStorages<Components...>();
         IStorage* smallest = getSmallestStorage<Components...>();
-        return View<Components...>(*this, smallest);
+        ComponentMask mask;
+        (mask.set(getComponentTypeId<Components>()), ...);
+        return View<Components...>(*this, smallest, mask);
     }
 
 private:
     /** @brief Entity lifetime manager. */
     EntityManager entities;
-    /** @brief Map of component storage classes keyed by type ID. */
-    std::unordered_map<std::size_t, std::unique_ptr<IStorage>> storages;
+    /** @brief Array of component storage classes indexed by component ID for O(1) access. */
+    std::array<std::unique_ptr<IStorage>, MAX_COMPONENTS> storages;
     /** @brief Callbacks for component insertions. */
     std::unordered_map<std::size_t, std::vector<ComponentAddedCallback>> componentAddedCallbacks;
     /** @brief Callbacks for component removals. */
     std::unordered_map<std::size_t, std::vector<ComponentRemovedCallback>> componentRemovedCallbacks;
+
+    /**
+     * @brief Helper to get compile-time static cached component type ID.
+     */
+    template<typename T>
+    static std::size_t getComponentTypeId() {
+        static const std::size_t id = registerComponentType(typeid(T));
+        return id;
+    }
 
     /**
      * @brief Ensures a component storage exists.
@@ -318,8 +340,8 @@ private:
      */
     template<typename T>
     void ensureStorage() {
-        std::size_t id = registerComponentType(typeid(T));
-        if (storages.find(id) == storages.end()) {
+        std::size_t id = getComponentTypeId<T>();
+        if (id < MAX_COMPONENTS && !storages[id]) {
             storages[id] = std::make_unique<ComponentStorage<T>>();
         }
     }
@@ -331,10 +353,9 @@ private:
      */
     template<typename T>
     ComponentStorage<T>* getStorage() {
-        std::size_t id = registerComponentType(typeid(T));
-        auto it = storages.find(id);
-        if (it == storages.end()) return nullptr;
-        return static_cast<ComponentStorage<T>*>(it->second.get());
+        std::size_t id = getComponentTypeId<T>();
+        if (id >= MAX_COMPONENTS) return nullptr;
+        return static_cast<ComponentStorage<T>*>(storages[id].get());
     }
 
     /**

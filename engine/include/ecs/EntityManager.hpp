@@ -19,8 +19,20 @@ public:
      * @brief Construct a new Entity Manager object and initializes the free identifier pool.
      */
     EntityManager() {
+        generations.fill(0);
+        aliveMask.reset();
         for (Entity::IdType i = 0; i < MAX_ENTITIES; ++i)
             freeIds.push(i);
+    }
+
+    /**
+     * @brief Checks if an entity handle is valid and currently alive.
+     * @param e Entity to check.
+     * @return True if alive and handle generation matches, false otherwise.
+     */
+    bool isValid(Entity e) const {
+        if (e.getId() >= MAX_ENTITIES || e.getId() == Entity::INVALID_ENTITY) return false;
+        return aliveMask.test(e.getId()) && generations[e.getId()] == e.getGeneration();
     }
 
     /**
@@ -31,20 +43,24 @@ public:
         if (freeIds.empty()) return Entity(Entity::INVALID_ENTITY);
         Entity::IdType id = freeIds.top();
         freeIds.pop();
+        aliveMask.set(id);
         alive.push_back(id);
         masks[id].reset();
-        return Entity(id);
+        return Entity(id, generations[id]);
     }
 
     /**
-     * @brief Destroys an entity and recycles its identifier.
+     * @brief Destroys an entity, recycling its identifier and incrementing generation.
      * @param e Entity to destroy.
      */
     void destroy(Entity e) {
-        if (e.getId() == Entity::INVALID_ENTITY) return;
-        masks[e.getId()].reset();
-        freeIds.push(e.getId());
-        alive.erase(std::remove(alive.begin(), alive.end(), e.getId()), alive.end());
+        if (!isValid(e)) return;
+        Entity::IdType id = e.getId();
+        masks[id].reset();
+        aliveMask.reset(id);
+        generations[id]++;
+        freeIds.push(id);
+        alive.erase(std::remove(alive.begin(), alive.end(), id), alive.end());
     }
 
     /**
@@ -67,6 +83,10 @@ public:
 private:
     /** @brief Tracking vector of active entity IDs. */
     std::vector<Entity::IdType> alive;
+    /** @brief Bitset marking active alive entity IDs for O(1) checks. */
+    std::bitset<MAX_ENTITIES> aliveMask;
+    /** @brief Array of generation counters to invalidate stale handles. */
+    std::array<std::uint32_t, MAX_ENTITIES> generations;
     /** @brief Stack of available identifiers. */
     std::stack<Entity::IdType> freeIds;
     /** @brief Array of component masks indexable by entity ID. */
