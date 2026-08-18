@@ -27,6 +27,7 @@
  */
 class AnimationSystem : public System {
 public:
+    const char* getName() const override { return "AnimationSystem"; }
     AnimationSystem(Registry& reg, VulkanRenderer& renderer, EditorModeState& editorMode)
         : registry(reg), renderer(renderer), editorMode(editorMode) {}
 

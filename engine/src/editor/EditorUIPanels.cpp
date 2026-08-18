@@ -26,6 +26,7 @@
 #include "ecs/components/Animator.hpp"
 #include "ecs/components/Hierarchy.hpp"
 #include "ecs/EntityCloner.hpp"
+#include "profiler/Profiler.hpp"
 
 namespace {
     inline bool isPrefabFile(const std::string& pathStr) {
@@ -191,6 +192,9 @@ void EditorUI::drawPanels() {
             }
             if (ImGui::MenuItem("Sprite Sheet Slicer")) {
                 s_openSpriteSlicerWindow = true;
+            }
+            if (ImGui::MenuItem("Profiler")) {
+                showProfilerPanel = true;
             }
             ImGui::EndMenu();
         }
@@ -441,6 +445,11 @@ void EditorUI::drawPanels() {
     // 8. Build Settings panel (floating modal)
     if (showBuildSettings) {
         drawBuildSettingsPanel();
+    }
+
+    // 9. Profiler panel
+    if (showProfilerPanel) {
+        drawProfilerPanel();
     }
 }
 
@@ -5224,6 +5233,279 @@ void EditorUI::drawAnimatorControllerWindow() {
             AnimationState* st = static_cast<AnimationState*>(gn.userData);
             s_statePositions[st->name] = gn.position;
         }
+    }
+
+    ImGui::End();
+}
+
+void EditorUI::drawProfilerPanel() {
+    ImGui::SetNextWindowSize(ImVec2(850, 520), ImGuiCond_FirstUseEver);
+    if (!ImGui::Begin("Profiler & Diagnostics", &showProfilerPanel)) {
+        ImGui::End();
+        return;
+    }
+
+    auto& profiler = Engine::Profiler::getInstance();
+    bool isPaused = profiler.isPaused();
+
+    // Top Header & Controls
+    ImGui::BeginGroup();
+    if (ImGui::Button(isPaused ? "  Resume Sampling  " : "  Pause Sampling  ")) {
+        profiler.setPaused(!isPaused);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("  Clear Data  ")) {
+        profiler.clearHistory();
+    }
+    ImGui::SameLine();
+
+    static int s_targetBudgetIdx = 0; // 0 = 60 FPS (16.6ms), 1 = 144 FPS (6.9ms), 2 = 240 FPS (4.1ms)
+    const char* budgets[] = { "60 FPS (16.66ms)", "144 FPS (6.94ms)", "240 FPS (4.16ms)" };
+    ImGui::SetNextItemWidth(170);
+    ImGui::Combo("Target Budget", &s_targetBudgetIdx, budgets, IM_ARRAYSIZE(budgets));
+    ImGui::EndGroup();
+
+    float targetFrameMs = (s_targetBudgetIdx == 0) ? 16.66f : (s_targetBudgetIdx == 1 ? 6.94f : 4.16f);
+
+    ImGui::Separator();
+
+    const auto& history = profiler.getFrameHistory();
+    Engine::FrameProfileData latestFrame = profiler.getLatestFrame();
+
+    if (ImGui::BeginTabBar("ProfilerTabs")) {
+
+        // TAB 1: Overview & Frame Timeline
+        if (ImGui::BeginTabItem("Overview & Timeline")) {
+            // Metrics Summary Cards
+            ImGui::Columns(4, "ProfilerMetricsColumns", false);
+
+            float avgMs = static_cast<float>(profiler.getAverageFrameTimeMs());
+            float minMs = static_cast<float>(profiler.getMinFrameTimeMs());
+            float maxMs = static_cast<float>(profiler.getMaxFrameTimeMs());
+            float avgFps = profiler.getAverageFPS();
+
+            // Card 1: FPS
+            ImGui::TextDisabled("AVERAGE FPS");
+            ImGui::TextColored(avgFps >= 58.0f ? ImVec4(0.3f, 0.9f, 0.3f, 1.0f) : ImVec4(0.9f, 0.6f, 0.2f, 1.0f), "%.1f FPS", avgFps);
+            ImGui::NextColumn();
+
+            // Card 2: Frame Time
+            ImGui::TextDisabled("CPU FRAME TIME");
+            ImGui::TextColored(avgMs <= targetFrameMs ? ImVec4(0.3f, 0.9f, 0.3f, 1.0f) : ImVec4(0.9f, 0.3f, 0.3f, 1.0f), "%.2f ms", avgMs);
+            ImGui::NextColumn();
+
+            // Card 3: Min / Max
+            ImGui::TextDisabled("MIN / MAX TIME");
+            ImGui::Text("%.2f / %.2f ms", minMs, maxMs);
+            ImGui::NextColumn();
+
+            // Card 4: Status / Health
+            ImGui::TextDisabled("BUDGET STATUS");
+            if (avgMs <= targetFrameMs) {
+                ImGui::TextColored(ImVec4(0.3f, 0.9f, 0.3f, 1.0f), "Within Budget");
+            } else if (avgMs <= targetFrameMs * 1.5f) {
+                ImGui::TextColored(ImVec4(0.9f, 0.7f, 0.2f, 1.0f), "Minor Overload");
+            } else {
+                ImGui::TextColored(ImVec4(0.9f, 0.3f, 0.3f, 1.0f), "Frame Spiking");
+            }
+            ImGui::Columns(1);
+
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+
+            // Frame History Timeline Plot
+            ImGui::Text("Frame Time History (Last %d frames)", static_cast<int>(history.size()));
+
+            std::vector<float> frameTimes;
+            frameTimes.reserve(history.size());
+            float maxRecordedMs = targetFrameMs * 2.0f;
+            for (const auto& frame : history) {
+                float val = static_cast<float>(frame.frameTimeMs);
+                frameTimes.push_back(val);
+                if (val > maxRecordedMs) maxRecordedMs = val;
+            }
+
+            if (!frameTimes.empty()) {
+                char overlay[64];
+                snprintf(overlay, sizeof(overlay), "Current: %.2f ms (%.1f FPS)", latestFrame.frameTimeMs, latestFrame.fps);
+                ImGui::PlotLines("##FrameGraph", frameTimes.data(), static_cast<int>(frameTimes.size()), 0, overlay, 0.0f, maxRecordedMs, ImVec2(-1, 140));
+            } else {
+                ImGui::TextDisabled("No frame history recorded yet.");
+            }
+
+            ImGui::TextDisabled("Legend: Budget target = %.2f ms (60 FPS threshold = 16.66 ms)", targetFrameMs);
+
+            ImGui::EndTabItem();
+        }
+
+        // TAB 2: ECS Systems Performance Table
+        if (ImGui::BeginTabItem("ECS Systems")) {
+            std::vector<Engine::SystemStats> sysStats = profiler.getSystemStats();
+
+            ImGui::Text("Active ECS Systems (%d registered)", static_cast<int>(sysStats.size()));
+            ImGui::Spacing();
+
+            static ImGuiTableFlags tableFlags = ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
+                ImGuiTableFlags_Resizable | ImGuiTableFlags_Sortable | ImGuiTableFlags_SizingFixedFit;
+
+            if (ImGui::BeginTable("ECSSystemsTable", 7, tableFlags)) {
+                ImGui::TableSetupColumn("System Name", ImGuiTableColumnFlags_WidthStretch);
+                ImGui::TableSetupColumn("Last (ms)", ImGuiTableColumnFlags_WidthFixed, 80.0f);
+                ImGui::TableSetupColumn("Avg (ms)", ImGuiTableColumnFlags_WidthFixed, 80.0f);
+                ImGui::TableSetupColumn("Min (ms)", ImGuiTableColumnFlags_WidthFixed, 80.0f);
+                ImGui::TableSetupColumn("Max (ms)", ImGuiTableColumnFlags_WidthFixed, 80.0f);
+                ImGui::TableSetupColumn("Share (%)", ImGuiTableColumnFlags_WidthFixed, 80.0f);
+                ImGui::TableSetupColumn("Budget Proportion", ImGuiTableColumnFlags_WidthFixed, 150.0f);
+                ImGui::TableHeadersRow();
+
+                for (const auto& stat : sysStats) {
+                    ImGui::TableNextRow();
+
+                    ImGui::TableSetColumnIndex(0);
+                    ImGui::Text("%s", stat.name.c_str());
+
+                    ImGui::TableSetColumnIndex(1);
+                    ImGui::Text("%.3f", stat.lastMs);
+
+                    ImGui::TableSetColumnIndex(2);
+                    ImGui::Text("%.3f", stat.avgMs);
+
+                    ImGui::TableSetColumnIndex(3);
+                    ImGui::Text("%.3f", stat.minMs);
+
+                    ImGui::TableSetColumnIndex(4);
+                    ImGui::Text("%.3f", stat.maxMs);
+
+                    ImGui::TableSetColumnIndex(5);
+                    ImGui::Text("%.1f%%", stat.percentShare);
+
+                    ImGui::TableSetColumnIndex(6);
+                    float fraction = static_cast<float>(stat.avgMs / targetFrameMs);
+                    if (fraction > 1.0f) fraction = 1.0f;
+                    char buf[32];
+                    snprintf(buf, sizeof(buf), "%.1f%%", stat.percentShare);
+                    ImGui::ProgressBar(fraction, ImVec2(-1, 0), buf);
+                }
+
+                ImGui::EndTable();
+            }
+
+            ImGui::EndTabItem();
+        }
+
+        // TAB 3: Rendering & Scene Stats
+        if (ImGui::BeginTabItem("Rendering & Scene")) {
+            const auto& rStats = latestFrame.renderStats;
+
+            ImGui::Columns(2, "RenderStatsCols", false);
+
+            drawSectionHeader("VULKAN RENDERER");
+            ImGui::BulletText("Draw Calls: %u", rStats.drawCalls);
+            ImGui::BulletText("Triangles Rendered: %u", rStats.triangleCount);
+            ImGui::BulletText("Vertices Rendered: %u", rStats.vertexCount);
+            ImGui::BulletText("Mesh SoA GPU Buffer: %.2f KB", static_cast<double>(rStats.meshMemoryBytes) / 1024.0);
+
+            ImGui::NextColumn();
+
+            drawSectionHeader("ECS SCENE POPULATION");
+            ImGui::BulletText("Active Entities: %u", rStats.entityCount);
+            ImGui::BulletText("Tracked Systems: %d", static_cast<int>(profiler.getSystemStats().size()));
+
+            ImGui::Columns(1);
+            ImGui::EndTabItem();
+        }
+
+        // TAB 4: Function Cost Analysis
+        if (ImGui::BeginTabItem("Function Costs")) {
+            std::vector<Engine::FunctionStats> fnStats = profiler.getFunctionStats();
+
+            static char s_funcFilterBuffer[128] = "";
+            ImGui::SetNextItemWidth(250);
+            ImGui::InputTextWithHint("##FuncFilter", "Search function or scope...", s_funcFilterBuffer, sizeof(s_funcFilterBuffer));
+            ImGui::SameLine();
+            ImGui::TextDisabled("(Total Profiled Scopes: %d)", static_cast<int>(fnStats.size()));
+
+            ImGui::Spacing();
+
+            static ImGuiTableFlags fnTableFlags = ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
+                ImGuiTableFlags_Resizable | ImGuiTableFlags_Sortable | ImGuiTableFlags_SizingFixedFit;
+
+            if (ImGui::BeginTable("FunctionCostsTable", 8, fnTableFlags)) {
+                ImGui::TableSetupColumn("Function / Scope Name", ImGuiTableColumnFlags_WidthStretch);
+                ImGui::TableSetupColumn("Calls/Frame", ImGuiTableColumnFlags_WidthFixed, 80.0f);
+                ImGui::TableSetupColumn("Last (ms)", ImGuiTableColumnFlags_WidthFixed, 75.0f);
+                ImGui::TableSetupColumn("Avg (ms)", ImGuiTableColumnFlags_WidthFixed, 75.0f);
+                ImGui::TableSetupColumn("Min (ms)", ImGuiTableColumnFlags_WidthFixed, 75.0f);
+                ImGui::TableSetupColumn("Max (ms)", ImGuiTableColumnFlags_WidthFixed, 75.0f);
+                ImGui::TableSetupColumn("Share (%)", ImGuiTableColumnFlags_WidthFixed, 75.0f);
+                ImGui::TableSetupColumn("Cost Bar", ImGuiTableColumnFlags_WidthFixed, 130.0f);
+                ImGui::TableHeadersRow();
+
+                std::string filterStr = s_funcFilterBuffer;
+                std::transform(filterStr.begin(), filterStr.end(), filterStr.begin(), ::tolower);
+
+                for (const auto& stat : fnStats) {
+                    if (!filterStr.empty()) {
+                        std::string lowerName = stat.name;
+                        std::transform(lowerName.begin(), lowerName.end(), lowerName.begin(), ::tolower);
+                        if (lowerName.find(filterStr) == std::string::npos) continue;
+                    }
+
+                    ImGui::TableNextRow();
+
+                    ImGui::TableSetColumnIndex(0);
+                    ImGui::Text("%s", stat.name.c_str());
+
+                    ImGui::TableSetColumnIndex(1);
+                    ImGui::Text("%u", stat.avgCallsPerFrame);
+
+                    ImGui::TableSetColumnIndex(2);
+                    ImGui::Text("%.3f", stat.lastMs);
+
+                    ImGui::TableSetColumnIndex(3);
+                    ImGui::Text("%.3f", stat.avgMs);
+
+                    ImGui::TableSetColumnIndex(4);
+                    ImGui::Text("%.3f", stat.minMs);
+
+                    ImGui::TableSetColumnIndex(5);
+                    ImGui::Text("%.3f", stat.maxMs);
+
+                    ImGui::TableSetColumnIndex(6);
+                    ImGui::Text("%.1f%%", stat.percentShare);
+
+                    ImGui::TableSetColumnIndex(7);
+                    float fraction = static_cast<float>(stat.avgMs / targetFrameMs);
+                    if (fraction > 1.0f) fraction = 1.0f;
+                    char buf[32];
+                    snprintf(buf, sizeof(buf), "%.1f%%", stat.percentShare);
+                    ImGui::ProgressBar(fraction, ImVec2(-1, 0), buf);
+                }
+
+                ImGui::EndTable();
+            }
+
+            ImGui::EndTabItem();
+        }
+
+        // TAB 5: Custom Scopes / Markers
+        if (ImGui::BeginTabItem("Custom Scopes")) {
+            ImGui::Text("Custom Code Scopes Record (%d entries)", static_cast<int>(latestFrame.customSamples.size()));
+            ImGui::Spacing();
+
+            if (latestFrame.customSamples.empty()) {
+                ImGui::TextDisabled("No custom PROFILE_SCOPE markers executed in the active frame.");
+            } else {
+                for (const auto& sample : latestFrame.customSamples) {
+                    ImGui::BulletText("%s: %.3f ms (%u call%s)", sample.name.c_str(), sample.durationMs, sample.calls, sample.calls > 1 ? "s" : "");
+                }
+            }
+
+            ImGui::EndTabItem();
+        }
+
+        ImGui::EndTabBar();
     }
 
     ImGui::End();

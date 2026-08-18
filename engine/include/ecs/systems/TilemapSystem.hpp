@@ -12,6 +12,7 @@ namespace Engine {
      */
     class ENGINE_API TilemapSystem : public System {
     public:
+        const char* getName() const override { return "TilemapSystem"; }
         /**
          * @brief Construct a new Tilemap System.
          * @param reg Reference to active Registry.

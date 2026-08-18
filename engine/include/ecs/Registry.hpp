@@ -8,6 +8,7 @@
 #include <memory>
 
 #include "core/EngineAPI.hpp"
+#include "profiler/Profiler.hpp"
 
 // Simple runtime component type id registry
 /**
@@ -90,6 +91,7 @@ public:
      * @return True if valid, false otherwise.
      */
     bool isValid(Entity e) const {
+        PROFILE_SCOPE("Registry::isValid");
         if (e.getId() == Entity::INVALID_ENTITY) return false;
         const auto& alive = entities.getAlive();
         return std::find(alive.begin(), alive.end(), e.getId()) != alive.end();

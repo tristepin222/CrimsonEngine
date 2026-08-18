@@ -15,6 +15,11 @@ public:
      * @brief Virtual destructor.
      */
     virtual ~System() = default;
+
+    /**
+     * @brief Human-readable name for profiling and debugging.
+     */
+    virtual const char* getName() const { return "System"; }
     
     /**
      * @brief Pure virtual update function to implement system behaviors.

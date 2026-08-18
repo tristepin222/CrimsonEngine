@@ -46,6 +46,7 @@ namespace Engine {
      */
     class PhysicsSystem : public System {
     public:
+        const char* getName() const override { return "PhysicsSystem"; }
         PhysicsSystem(Registry& reg, EditorModeState& editorMode)
             : registry(reg), editorMode(editorMode) {}
 

@@ -23,6 +23,7 @@
 #include "ecs/components/EditorCamera.hpp"
 #include "ecs/components/Name.hpp"
 #include "ecs/components/Transform.hpp"
+#include "profiler/Profiler.hpp"
 #include "ecs/components/Camera.hpp"
 #include "ecs/components/inputComponent.hpp"
 
@@ -588,6 +589,9 @@ namespace Engine {
 
             float dt = renderer->getDeltaTime();
 
+            // Begin frame profiling
+            Engine::Profiler::getInstance().beginFrame();
+
             // Run user update callback
             onUpdate(dt);
 
@@ -636,6 +640,9 @@ namespace Engine {
                 // Fallback: draw viewport fullscreen with no UI overlay if editorUI is somehow null
                 renderSystem->drawFrame();
             }
+
+            // End frame profiling
+            Engine::Profiler::getInstance().endFrame();
         }
 
         onShutdown();

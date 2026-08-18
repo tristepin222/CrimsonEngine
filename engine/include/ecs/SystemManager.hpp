@@ -1,5 +1,6 @@
 #pragma once
 #include "System.hpp"
+#include "profiler/Profiler.hpp"
 #include <memory>
 #include <vector>
 #include <iostream>
@@ -41,6 +42,7 @@ public:
      */
     void updateAll(float dt) {
         for (auto& system : systems) {
+            PROFILE_SYSTEM(system->getName());
             system->update(dt);
         }
     }
@@ -51,6 +53,7 @@ public:
      */
     void updateEditorAll(float dt) {
         for (auto& system : systems) {
+            PROFILE_SYSTEM(system->getName());
             system->onEditorUpdate(dt);
         }
     }

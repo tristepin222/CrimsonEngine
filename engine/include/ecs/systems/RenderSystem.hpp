@@ -26,6 +26,7 @@
  */
 class RenderSystem : public System {
 public:
+    const char* getName() const override { return "RenderSystem"; }
     /**
      * @brief Construct a new Render System object and subscribes to component add/remove events.
      * @param reg Reference to the ECS Registry.
@@ -283,6 +284,7 @@ private:
      * @brief Binds pipelines, descriptor sets, and draw buffers for geometry batches.
      */
     void drawBatches() {
+        PROFILE_FUNCTION();
         VkCommandBuffer cmd = renderer.getCurrentCommandBuffer();
         VkDescriptorSet cameraSet = renderer.getCameraDescriptorSet();
 
@@ -408,6 +410,19 @@ private:
                 0,
                 0);
         }
+
+        // Update Profiler RenderStats
+        Engine::RenderStats rStats{};
+        rStats.drawCalls = static_cast<uint32_t>(drawCalls.size());
+        rStats.entityCount = static_cast<uint32_t>(registry.getAlive().size());
+        rStats.meshMemoryBytes = renderer.meshSoA.vertices.size() * sizeof(Vertex);
+        for (const auto& dc : drawCalls) {
+            if (dc.mesh) {
+                rStats.vertexCount += static_cast<uint32_t>(dc.mesh->vertices.size());
+                rStats.triangleCount += static_cast<uint32_t>(dc.mesh->indices.size() / 3);
+            }
+        }
+        Engine::Profiler::getInstance().updateRenderStats(rStats);
     }
 
     /**

@@ -53,6 +53,7 @@ set(ENGINE_SOURCES
     src/ecs/EntityFactory.cpp
     src/ecs/EntityCloner.cpp
     src/ecs/Registry.cpp
+    src/profiler/Profiler.cpp
     src/ecs/systems/PlayerControllerSystem.cpp
     src/editor/EditorUI.cpp
     src/editor/EditorUIPanels.cpp

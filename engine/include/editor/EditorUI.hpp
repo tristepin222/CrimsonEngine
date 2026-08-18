@@ -344,6 +344,10 @@ private:
     bool showColliders = false;
     /** @brief Whether the Build Settings panel is open. */
     bool showBuildSettings = false;
+    /** @brief Whether the Profiler panel is open. */
+    bool showProfilerPanel = false;
+    /** @brief Renders the in-depth Profiler window. */
+    void drawProfilerPanel();
     /** @brief Output path for game builds. */
     std::string buildOutputPath = "build/";
     /** @brief Status message from last build attempt. */
