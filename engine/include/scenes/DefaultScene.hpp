@@ -18,7 +18,9 @@ namespace Engine {
          * @param jsonPath Path to the scene JSON file.
          */
         DefaultScene(Registry& registry, VulkanRenderer& renderer, const std::string& jsonPath)
-            : Scene(registry, renderer), scenePath(jsonPath) {}
+            : Scene(registry, renderer), scenePath(jsonPath) {
+            currentPath = jsonPath;
+        }
 
         /**
          * @brief Loads the scene entities from JSON path if the file exists.

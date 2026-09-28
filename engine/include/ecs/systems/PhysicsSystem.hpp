@@ -6,6 +6,9 @@
 #include "ecs/components/Collider.hpp"
 #include "ecs/components/Hierarchy.hpp"
 #include "ecs/components/Tilemap.hpp"
+#include "ecs/components/TerrainComponent.hpp"
+#include "ecs/components/PlayerControllerComponent.hpp"
+#include "ecs/systems/TerrainSystem.hpp"
 #include "editor/EditorModeState.hpp"
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -161,6 +164,7 @@ namespace Engine {
             
             std::vector<ColliderEntry> colliders;
             for (auto [entity, transform, collider] : registry.view<Transform, ColliderComponent>()) {
+                if (registry.has<TerrainComponent>(entity)) continue;
                 colliders.push_back({entity, &transform, &collider});
             }
 
@@ -191,8 +195,10 @@ namespace Engine {
 
             // 2b. Direct O(1) Tilemap Grid Collision Pass (Zero Physics Entities)
             for (auto [actorEnt, trans, col] : registry.view<Transform, ColliderComponent>()) {
+                if (registry.has<TerrainComponent>(actorEnt)) continue;
                 auto* rb = registry.get<RigidBodyComponent>(actorEnt);
-                if (rb && rb->type == RigidBodyType::Static) continue;
+                bool isDynamic = (rb && rb->type != RigidBodyType::Static) || registry.has<PlayerControllerComponent>(actorEnt);
+                if (!isDynamic) continue;
 
                 glm::vec3 actorPos = trans.position + col.offset;
                 glm::vec3 actorExtents = col.extents;
@@ -255,6 +261,84 @@ namespace Engine {
                 }
             }
 
+            // 2c. Direct O(1) Terrain Heightfield Surface Collision Pass (Zero Physics Entities)
+            for (auto [actorEnt, trans, col] : registry.view<Transform, ColliderComponent>()) {
+                if (registry.has<TerrainComponent>(actorEnt)) continue;
+                auto* rb = registry.get<RigidBodyComponent>(actorEnt);
+                bool isDynamic = (rb && rb->type != RigidBodyType::Static) || registry.has<PlayerControllerComponent>(actorEnt);
+                if (!isDynamic) continue;
+
+                glm::mat4 actorWorldM = getEntityWorldMatrix(actorEnt);
+                glm::vec3 actorCenterWorld = glm::vec3(actorWorldM * glm::vec4(col.offset, 1.0f));
+
+                float bottomOffset = 0.0f;
+                if (col.shape == ColliderShape::Sphere) {
+                    float scaleY = glm::length(glm::vec3(actorWorldM[1]));
+                    bottomOffset = col.radius * scaleY;
+                } else if (col.shape == ColliderShape::Capsule) {
+                    float scaleY = glm::length(glm::vec3(actorWorldM[1]));
+                    bottomOffset = (col.height * 0.5f + col.radius) * scaleY;
+                } else {
+                    float scaleY = glm::length(glm::vec3(actorWorldM[1]));
+                    bottomOffset = col.extents.y * scaleY;
+                }
+
+                for (auto [terrainEnt, terrain] : registry.view<TerrainComponent>()) {
+                    auto* terrainTrans = registry.get<Transform>(terrainEnt);
+                    glm::mat4 terrainWorldM = getEntityWorldMatrix(terrainEnt);
+                    glm::mat4 invTerrainWorldM = glm::inverse(terrainWorldM);
+
+                    // Convert actor center to terrain local coordinates
+                    glm::vec3 localActorPos = glm::vec3(invTerrainWorldM * glm::vec4(actorCenterWorld, 1.0f));
+
+                    float halfX = terrain.sizeX * 0.5f;
+                    float halfZ = terrain.sizeZ * 0.5f;
+
+                    // Actor must be within terrain horizontal footprint
+                    if (localActorPos.x < -halfX || localActorPos.x > halfX ||
+                        localActorPos.z < -halfZ || localActorPos.z > halfZ) {
+                        continue;
+                    }
+
+                    float surfaceLocalY = terrain.getInterpolatedHeight(localActorPos.x, localActorPos.z);
+                    float terrainScaleY = glm::length(glm::vec3(terrainWorldM[1]));
+                    float localBottomOffset = (terrainScaleY > 1e-4f) ? (bottomOffset / terrainScaleY) : bottomOffset;
+                    float localActorBottomY = localActorPos.y - localBottomOffset;
+
+                    // Check if actor penetrates terrain surface
+                    if (localActorBottomY < surfaceLocalY) {
+                        float penetrationLocal = surfaceLocalY - localActorBottomY;
+
+                        // Only resolve reasonable penetrations (skip if completely beneath the terrain structure)
+                        if (penetrationLocal > 0.0f && penetrationLocal < (terrain.heightScale + 10.0f)) {
+                            glm::vec3 localNormal = terrain.getInterpolatedNormal(localActorPos.x, localActorPos.z);
+                            glm::vec3 worldNormal = glm::normalize(glm::vec3(terrainWorldM * glm::vec4(localNormal, 0.0f)));
+
+                            float worldPenetration = penetrationLocal * (terrainScaleY > 1e-4f ? terrainScaleY : 1.0f);
+
+                            // Resolve position upwards along normal
+                            glm::vec3 resolve = worldNormal * worldPenetration;
+                            if (resolve.y < worldPenetration * 0.7f) {
+                                resolve.y = worldPenetration;
+                            }
+
+                            trans.position += resolve;
+                            actorCenterWorld += resolve;
+
+                            if (rb) {
+                                float velAlongNormal = glm::dot(rb->velocity, worldNormal);
+                                if (velAlongNormal < 0.0f) {
+                                    rb->velocity -= velAlongNormal * worldNormal;
+                                    rb->velocity.x *= (1.0f - std::min(1.0f, 5.0f * dt));
+                                    rb->velocity.z *= (1.0f - std::min(1.0f, 5.0f * dt));
+                                }
+                                rb->hadContactThisFrame = true;
+                            }
+                        }
+                    }
+                }
+            }
+
             // 3. Post-collision Sleep / Velocity-Floor Pass
             {
                 const float sleepLinThresh = 0.08f;   // m/s
@@ -292,6 +376,7 @@ namespace Engine {
             closestHit.distance = std::numeric_limits<float>::max();
 
             for (auto [entity, transform, collider] : registry.view<Transform, ColliderComponent>()) {
+                if (registry.has<TerrainComponent>(entity)) continue;
                 glm::mat4 worldM = getEntityWorldMatrix(entity);
                 glm::vec3 colPos = glm::vec3(worldM * glm::vec4(collider.offset, 1.0f));
                 RaycastHit hit;
@@ -433,6 +518,23 @@ namespace Engine {
                 if (hit.hit && hit.distance < closestHit.distance) {
                     closestHit = hit;
                     closestHit.entity = entity;
+                }
+            }
+
+            for (auto [terrainEnt, terrain] : registry.view<TerrainComponent>()) {
+                glm::mat4 terrainWorldM = getEntityWorldMatrix(terrainEnt);
+                glm::vec3 hitWorldPos;
+                glm::vec2 hitLocalXZ;
+                if (TerrainSystem::raycast(ray.origin, ray.direction, terrainWorldM, terrain, hitWorldPos, hitLocalXZ)) {
+                    float d = glm::distance(ray.origin, hitWorldPos);
+                    if (d < closestHit.distance) {
+                        closestHit.hit = true;
+                        closestHit.distance = d;
+                        closestHit.position = hitWorldPos;
+                        glm::vec3 localN = terrain.getInterpolatedNormal(hitLocalXZ.x, hitLocalXZ.y);
+                        closestHit.normal = glm::normalize(glm::vec3(terrainWorldM * glm::vec4(localN, 0.0f)));
+                        closestHit.entity = terrainEnt;
+                    }
                 }
             }
 

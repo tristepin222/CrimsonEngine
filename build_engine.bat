@@ -21,6 +21,12 @@ if "%1"=="--clean" (
     )
 )
 
+if /I "%~1"=="--config" (
+    set CONFIG=%~2
+)
+
+echo [Engine Build] Using configuration: %CONFIG%
+
 echo [Engine Build] Configuring CMake (engine-only)...
 cmake -S . -B %BUILD_DIR% ^
     -G "%CMAKE_GENERATOR%" ^
@@ -106,6 +112,15 @@ if exist %BUILD_DIR%\plugins\AStar\%CONFIG%\astar_plugin.dll (
     copy /Y %BUILD_DIR%\plugins\AStar\%CONFIG%\astar_plugin.dll %SDK_DIR%\plugins\
     mkdir %SDK_DIR%\include\plugins\AStar
     copy /Y plugins\AStar\include\*.hpp %SDK_DIR%\include\plugins\AStar\
+)
+if exist %BUILD_DIR%\plugins\skymo\%CONFIG%\skymo_plugin.dll (
+    mkdir %SDK_DIR%\plugins
+    copy /Y %BUILD_DIR%\plugins\skymo\%CONFIG%\skymo_plugin.dll %SDK_DIR%\plugins\
+    mkdir %SDK_DIR%\include\plugins\skymo
+    copy /Y plugins\skymo\include\*.hpp %SDK_DIR%\include\plugins\skymo\
+    if exist plugins\skymo\assets (
+        xcopy /E /Y /I plugins\skymo\assets %SDK_DIR%\plugins\skymo\assets\
+    )
 )
 
 REM Copy EngineConfig.cmake (for standalone game CMake projects)

@@ -71,6 +71,7 @@ set(ENGINE_SOURCES
     src/scenes/SceneSerializer.cpp
     src/scenes/TilesetAsset.cpp
     src/renderer/ResourceManager.cpp
+    src/renderer/ShaderCompiler.cpp
     src/meta/ComponentReflection.cpp
     src/meta/engine_generated_reflection.cpp
 
@@ -80,8 +81,10 @@ set(ENGINE_SOURCES
     src/miniaudio.cpp
     src/ecs/systems/AudioSystem.cpp
     src/ecs/systems/TilemapSystem.cpp
+    src/ecs/systems/TerrainSystem.cpp
     src/ecs/systems/UISystem.cpp
     src/ecs/systems/SpriteSystem.cpp
+    src/ecs/systems/GridWorldSystem.cpp
     src/ui/UIBuilder.cpp
 )
 
@@ -110,9 +113,10 @@ target_link_libraries(engine PUBLIC
     Vulkan::Vulkan
     imgui
     imguizmo
+PRIVATE
     Tracy::TracyClient
 )
-target_compile_definitions(engine PUBLIC TRACY_ENABLE TRACY_ON_DEMAND)
+target_compile_definitions(engine PRIVATE TRACY_ENABLE TRACY_ON_DEMAND)
 
 # --- Builtin Shaders Compilation ---
 # Compile grid.vert, grid.frag, unlit.vert, unlit.frag into SPIR-V.
@@ -146,6 +150,18 @@ compile_builtin_shader("${CMAKE_CURRENT_SOURCE_DIR}/builtin_shaders/lit.frag")
 compile_builtin_shader("${CMAKE_CURRENT_SOURCE_DIR}/builtin_shaders/skinned_lit.vert")
 compile_builtin_shader("${CMAKE_CURRENT_SOURCE_DIR}/builtin_shaders/sprite.vert")
 compile_builtin_shader("${CMAKE_CURRENT_SOURCE_DIR}/builtin_shaders/sprite.frag")
+compile_builtin_shader("${CMAKE_CURRENT_SOURCE_DIR}/builtin_shaders/shadow.vert")
+compile_builtin_shader("${CMAKE_CURRENT_SOURCE_DIR}/builtin_shaders/skinned_shadow.vert")
+compile_builtin_shader("${CMAKE_CURRENT_SOURCE_DIR}/builtin_shaders/tonemap.vert")
+compile_builtin_shader("${CMAKE_CURRENT_SOURCE_DIR}/builtin_shaders/tonemap.frag")
+compile_builtin_shader("${CMAKE_CURRENT_SOURCE_DIR}/builtin_shaders/terrain.vert")
+compile_builtin_shader("${CMAKE_CURRENT_SOURCE_DIR}/builtin_shaders/terrain.frag")
+compile_builtin_shader("${CMAKE_CURRENT_SOURCE_DIR}/builtin_shaders/foliage.vert")
+compile_builtin_shader("${CMAKE_CURRENT_SOURCE_DIR}/builtin_shaders/foliage.frag")
+compile_builtin_shader("${CMAKE_CURRENT_SOURCE_DIR}/builtin_shaders/pixelate.frag")
+compile_builtin_shader("${CMAKE_CURRENT_SOURCE_DIR}/builtin_shaders/grayscale.frag")
+compile_builtin_shader("${CMAKE_CURRENT_SOURCE_DIR}/builtin_shaders/ssao.frag")
+compile_builtin_shader("${CMAKE_CURRENT_SOURCE_DIR}/builtin_shaders/ssao_blur.frag")
 
 # Target for builtin shaders compilation
 add_custom_target(compile_builtin_shaders ALL DEPENDS ${BUILTIN_SHADERS_SPV})

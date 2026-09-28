@@ -162,6 +162,7 @@ namespace Engine {
 
                 // Sync playback play/stop transitions
                 if (source.isPlaying && !source.wasPlaying) {
+                    ma_sound_seek_to_pcm_frame(pSound, 0);
                     ma_sound_start(pSound);
                     source.wasPlaying = true;
                 } else if (!source.isPlaying && source.wasPlaying) {

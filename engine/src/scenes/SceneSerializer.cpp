@@ -23,6 +23,9 @@
 #include "ecs/components/Tilemap.hpp"
 #include "ecs/components/UIComponents.hpp"
 #include "ecs/components/SpriteRenderer.hpp"
+#include "ecs/components/LightComponent.hpp"
+#include "ecs/components/TerrainComponent.hpp"
+#include "ecs/components/GridWorldComponent.hpp"
 
 
 struct ParentNameComponent {
@@ -33,6 +36,82 @@ struct ParentNameComponent {
 #include <fstream>
 #include <sstream>
 #include <unordered_map>
+
+namespace {
+    static const std::string BASE64_CHARS =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        "abcdefghijklmnopqrstuvwxyz"
+        "0123456789+/";
+
+    static inline bool isBase64Char(unsigned char c) {
+        return (isalnum(c) || (c == '+') || (c == '/'));
+    }
+
+    std::string base64Encode(const uint8_t* data, size_t len) {
+        std::string ret;
+        ret.reserve(((len + 2) / 3) * 4);
+        int i = 0;
+        uint8_t char_array_3[3];
+        uint8_t char_array_4[4];
+
+        while (len--) {
+            char_array_3[i++] = *(data++);
+            if (i == 3) {
+                char_array_4[0] = (char_array_3[0] & 0xfc) >> 2;
+                char_array_4[1] = ((char_array_3[0] & 0x03) << 4) + ((char_array_3[1] & 0xf0) >> 4);
+                char_array_4[2] = ((char_array_3[1] & 0x0f) << 2) + ((char_array_3[2] & 0xc0) >> 6);
+                char_array_4[3] = char_array_3[2] & 0x3f;
+                for (i = 0; i < 4; i++) ret += BASE64_CHARS[char_array_4[i]];
+                i = 0;
+            }
+        }
+
+        if (i) {
+            for (int j = i; j < 3; j++) char_array_3[j] = '\0';
+            char_array_4[0] = (char_array_3[0] & 0xfc) >> 2;
+            char_array_4[1] = ((char_array_3[0] & 0x03) << 4) + ((char_array_3[1] & 0xf0) >> 4);
+            char_array_4[2] = ((char_array_3[1] & 0x0f) << 2) + ((char_array_3[2] & 0xc0) >> 6);
+            for (int j = 0; j < i + 1; j++) ret += BASE64_CHARS[char_array_4[j]];
+            while ((i++ < 3)) ret += '=';
+        }
+
+        return ret;
+    }
+
+    std::vector<uint8_t> base64Decode(const std::string& encoded_string) {
+        size_t in_len = encoded_string.size();
+        int i = 0;
+        int in_ = 0;
+        uint8_t char_array_4[4], char_array_3[3];
+        std::vector<uint8_t> ret;
+        ret.reserve((in_len * 3) / 4);
+
+        while (in_len-- && (encoded_string[in_] != '=') && isBase64Char(static_cast<unsigned char>(encoded_string[in_]))) {
+            char_array_4[i++] = encoded_string[in_]; in_++;
+            if (i == 4) {
+                for (i = 0; i < 4; i++)
+                    char_array_4[i] = static_cast<uint8_t>(BASE64_CHARS.find(char_array_4[i]));
+                char_array_3[0] = (char_array_4[0] << 2) + ((char_array_4[1] & 0x30) >> 4);
+                char_array_3[1] = ((char_array_4[1] & 0xf) << 4) + ((char_array_4[2] & 0x3c) >> 2);
+                char_array_3[2] = ((char_array_4[2] & 0x3) << 6) + char_array_4[3];
+                for (i = 0; i < 3; i++) ret.push_back(char_array_3[i]);
+                i = 0;
+            }
+        }
+
+        if (i) {
+            for (int j = i; j < 4; j++) char_array_4[j] = 0;
+            for (int j = 0; j < 4; j++)
+                char_array_4[j] = static_cast<uint8_t>(BASE64_CHARS.find(char_array_4[j]));
+            char_array_3[0] = (char_array_4[0] << 2) + ((char_array_4[1] & 0x30) >> 4);
+            char_array_3[1] = ((char_array_4[1] & 0xf) << 4) + ((char_array_4[2] & 0x3c) >> 2);
+            char_array_3[2] = ((char_array_4[2] & 0x3) << 6) + char_array_4[3];
+            for (int j = 0; j < i - 1; j++) ret.push_back(char_array_3[j]);
+        }
+
+        return ret;
+    }
+}
 
 // Static initializer to register core engine components with the registry
 /**
@@ -153,8 +232,8 @@ static bool registerBuiltinComponents() {
     reg.registerComponent(
         "Primitive",
         [](Registry& registry, Entity entity, std::ostream& out, int indent) {
-            if (registry.has<Engine::TilemapComponent>(entity) || registry.has<Engine::CanvasComponent>(entity) || registry.has<Engine::RectTransform>(entity) || registry.has<Engine::SpriteRenderer>(entity)) {
-                return; // Skip primitive details for Tilemap, UI, and Sprite entities
+            if (registry.has<Engine::TilemapComponent>(entity) || registry.has<Engine::CanvasComponent>(entity) || registry.has<Engine::RectTransform>(entity) || registry.has<Engine::SpriteRenderer>(entity) || registry.has<Engine::TerrainComponent>(entity)) {
+                return; // Skip primitive details for Tilemap, UI, Sprite, and Terrain entities
             }
 
             if (auto* mesh = registry.get<Mesh>(entity)) {
@@ -207,12 +286,14 @@ static bool registerBuiltinComponents() {
             std::string gltfPath = JSONUtils::extractStringValue(json, "gltfPath");
             std::string texturePath = JSONUtils::extractStringValue(json, "texturePath");
             
-            if (type == "Camera" || type == "Grid" || type == "Tilemap" || type == "Canvas" || type == "UIElement" ||
+            if (type == "Camera" || type == "Grid" || type == "Tilemap" || type == "Canvas" || type == "UIElement" || type == "Terrain" ||
                 json.find("\"hasRectTransform\":") != std::string::npos ||
                 json.find("\"hasRectTransformComponent\":") != std::string::npos ||
                 json.find("\"hasCanvas\":") != std::string::npos ||
                 json.find("\"hasCanvasComponent\":") != std::string::npos ||
-                json.find("\"anchorMin\":") != std::string::npos) {
+                json.find("\"anchorMin\":") != std::string::npos ||
+                json.find("\"hasTerrain\":") != std::string::npos ||
+                json.find("\"hasTerrainComponent\":") != std::string::npos) {
                 return; // Managed by separate component deserializers
             }
 
@@ -918,6 +999,10 @@ static bool registerBuiltinComponents() {
     reg.registerComponent(
         "Tilemap",
         [](Registry& registry, Entity entity, std::ostream& out, int indent) {
+            // Never serialize TilemapComponent for a terrain entity (strictly 2D only)
+            if (registry.has<Engine::TerrainComponent>(entity)) {
+                return;
+            }
             if (auto* tm = registry.get<Engine::TilemapComponent>(entity)) {
                 out << ",\n" << JSONUtils::indent(indent) << "\"entityType\": " << JSONUtils::quote("Tilemap") << ",\n";
                 out << JSONUtils::indent(indent) << "\"width\": " << tm->width << ",\n";
@@ -968,11 +1053,31 @@ static bool registerBuiltinComponents() {
             }
         },
         [](Registry& registry, VulkanRenderer&, Entity entity, const std::string& json) {
-            std::string type = JSONUtils::extractStringValue(json, "entityType");
-            if (type == "Tilemap" || json.find("\"tiles\":") != std::string::npos || json.find("\"layers\":") != std::string::npos || json.find("\"chunks\":") != std::string::npos) {
-                if (!registry.has<Engine::TilemapComponent>(entity)) {
-                    registry.emplace<Engine::TilemapComponent>(entity, Engine::TilemapComponent{});
+            // NEVER deserialize Tilemap on a Terrain entity (tilemaps are strictly for 2D, not 3D terrain)
+            if (registry.has<Engine::TerrainComponent>(entity)) {
+                if (registry.has<Engine::TilemapComponent>(entity)) {
+                    registry.remove<Engine::TilemapComponent>(entity);
                 }
+                return;
+            }
+
+            std::string type = JSONUtils::extractStringValue(json, "entityType");
+            if (type == "Terrain" || json.find("\"heights\":") != std::string::npos || json.find("\"heightsBase64\":") != std::string::npos || json.find("\"Terrain\":") != std::string::npos) {
+                if (registry.has<Engine::TilemapComponent>(entity)) {
+                    registry.remove<Engine::TilemapComponent>(entity);
+                }
+                return;
+            }
+
+            bool isTilemap = (type == "Tilemap") ||
+                             (json.find("\"tilesetPath\":") != std::string::npos) ||
+                             (json.find("\"tileSize\":") != std::string::npos && json.find("\"tiles\":") != std::string::npos);
+
+            if (!isTilemap) return;
+
+            if (!registry.has<Engine::TilemapComponent>(entity)) {
+                registry.emplace<Engine::TilemapComponent>(entity, Engine::TilemapComponent{});
+            }
                 if (auto* tm = registry.get<Engine::TilemapComponent>(entity)) {
                     float val = 0.f;
                     if (JSONUtils::extractFloatValue(json, "width",    val)) tm->width    = (int)val;
@@ -1154,9 +1259,717 @@ static bool registerBuiltinComponents() {
 
                     tm->isDirty = true;
                 }
+        }
+    );
+
+    // 6b. Terrain Component Serializer
+    reg.registerComponent(
+        "Terrain",
+        [](Registry& registry, Entity entity, std::ostream& out, int indent) {
+            if (auto* terrain = registry.get<Engine::TerrainComponent>(entity)) {
+                out << JSONUtils::indent(indent) << "\"Terrain\": {\n";
+                out << JSONUtils::indent(indent + 1) << "\"entityType\": " << JSONUtils::quote("Terrain") << ",\n";
+                out << JSONUtils::indent(indent + 1) << "\"sizeX\": " << terrain->sizeX << ",\n";
+                out << JSONUtils::indent(indent + 1) << "\"sizeZ\": " << terrain->sizeZ << ",\n";
+                out << JSONUtils::indent(indent + 1) << "\"chunkCountX\": " << terrain->chunkCountX << ",\n";
+                out << JSONUtils::indent(indent + 1) << "\"chunkCountZ\": " << terrain->chunkCountZ << ",\n";
+                out << JSONUtils::indent(indent + 1) << "\"chunkResolution\": " << terrain->chunkResolution << ",\n";
+                out << JSONUtils::indent(indent + 1) << "\"resolutionX\": " << terrain->resolutionX << ",\n";
+                out << JSONUtils::indent(indent + 1) << "\"resolutionZ\": " << terrain->resolutionZ << ",\n";
+                out << JSONUtils::indent(indent + 1) << "\"heightScale\": " << terrain->heightScale << ",\n";
+                out << JSONUtils::indent(indent + 1) << "\"uvScale\": " << terrain->uvScale << ",\n";
+                out << JSONUtils::indent(indent + 1) << "\"brushRadius\": " << terrain->brushRadius << ",\n";
+                out << JSONUtils::indent(indent + 1) << "\"brushStrength\": " << terrain->brushStrength << ",\n";
+                out << JSONUtils::indent(indent + 1) << "\"brushMode\": " << static_cast<int>(terrain->brushMode) << ",\n";
+                out << JSONUtils::indent(indent + 1) << "\"brushFalloff\": " << static_cast<int>(terrain->brushFalloff) << ",\n";
+                out << JSONUtils::indent(indent + 1) << "\"flattenTargetHeight\": " << terrain->flattenTargetHeight << ",\n";
+                out << JSONUtils::indent(indent + 1) << "\"noiseSeed\": " << terrain->noiseSeed << ",\n";
+                out << JSONUtils::indent(indent + 1) << "\"noiseFrequency\": " << terrain->noiseFrequency << ",\n";
+                out << JSONUtils::indent(indent + 1) << "\"noiseOctaves\": " << terrain->noiseOctaves << ",\n";
+                out << JSONUtils::indent(indent + 1) << "\"showChunkBorders\": " << (terrain->showChunkBorders ? "true" : "false") << ",\n";
+                out << JSONUtils::indent(indent + 1) << "\"autoScaleWithChunks\": " << (terrain->autoScaleWithChunks ? "true" : "false") << ",\n";
+                out << JSONUtils::indent(indent + 1) << "\"noisePersistence\": " << terrain->noisePersistence << ",\n";
+                out << JSONUtils::indent(indent + 1) << "\"noiseLacunarity\": " << terrain->noiseLacunarity << ",\n";
+                out << JSONUtils::indent(indent + 1) << "\"toolMode\": " << static_cast<int>(terrain->toolMode) << ",\n";
+                out << JSONUtils::indent(indent + 1) << "\"activeLayerIndex\": " << terrain->activeLayerIndex << ",\n";
+                out << JSONUtils::indent(indent + 1) << "\"splatmapResolution\": " << terrain->splatmapResolution << ",\n";
+                out << JSONUtils::indent(indent + 1) << "\"foliageEnabled\": " << (terrain->foliageEnabled ? "true" : "false") << ",\n";
+                out << JSONUtils::indent(indent + 1) << "\"foliageDensity\": " << terrain->foliageDensity << ",\n";
+                out << JSONUtils::indent(indent + 1) << "\"foliageMaxDistance\": " << terrain->foliageMaxDistance << ",\n";
+                out << JSONUtils::indent(indent + 1) << "\"foliageScaleMin\": " << terrain->foliageScaleMin << ",\n";
+                out << JSONUtils::indent(indent + 1) << "\"foliageScaleMax\": " << terrain->foliageScaleMax << ",\n";
+                out << JSONUtils::indent(indent + 1) << "\"foliageWindStrength\": " << terrain->foliageWindStrength << ",\n";
+                out << JSONUtils::indent(indent + 1) << "\"foliageGrassLayer\": " << terrain->foliageGrassLayer << ",\n";
+                out << JSONUtils::indent(indent + 1) << "\"foliageMinWeight\": " << terrain->foliageMinWeight << ",\n";
+                out << JSONUtils::indent(indent + 1) << "\"foliageMaxSlope\": " << terrain->foliageMaxSlope << ",\n";
+                out << JSONUtils::indent(indent + 1) << "\"foliageTint\": " << JSONUtils::vec4ToJson(terrain->foliageTint) << ",\n";
+                out << JSONUtils::indent(indent + 1) << "\"foliageTexturePath\": " << JSONUtils::quote(terrain->foliageTexturePath) << ",\n";
+                out << JSONUtils::indent(indent + 1) << "\"foliageMeshPath\": " << JSONUtils::quote(terrain->foliageMeshPath) << ",\n";
+                out << JSONUtils::indent(indent + 1) << "\"foliageBrushLayerFilter\": " << terrain->foliageBrushLayerFilter << ",\n";
+                out << JSONUtils::indent(indent + 1) << "\"detailPalette\": [\n";
+                for (size_t i = 0; i < terrain->detailPalette.size(); ++i) {
+                    const auto& item = terrain->detailPalette[i];
+                    if (i > 0) out << ",\n";
+                    out << JSONUtils::indent(indent + 2) << "{\n";
+                    out << JSONUtils::indent(indent + 3) << "\"name\": " << JSONUtils::quote(item.name) << ",\n";
+                    out << JSONUtils::indent(indent + 3) << "\"enabled\": " << (item.enabled ? "true" : "false") << ",\n";
+                    out << JSONUtils::indent(indent + 3) << "\"type\": " << static_cast<uint32_t>(item.type) << ",\n";
+                    out << JSONUtils::indent(indent + 3) << "\"targetLayer\": " << item.targetLayer << ",\n";
+                    out << JSONUtils::indent(indent + 3) << "\"meshPath\": " << JSONUtils::quote(item.meshPath) << ",\n";
+                    out << JSONUtils::indent(indent + 3) << "\"texturePath\": " << JSONUtils::quote(item.texturePath) << ",\n";
+                    out << JSONUtils::indent(indent + 3) << "\"prefabPath\": " << JSONUtils::quote(item.prefabPath) << ",\n";
+                    out << JSONUtils::indent(indent + 3) << "\"density\": " << item.density << ",\n";
+                    out << JSONUtils::indent(indent + 3) << "\"scaleMin\": " << item.scaleMin << ",\n";
+                    out << JSONUtils::indent(indent + 3) << "\"scaleMax\": " << item.scaleMax << ",\n";
+                    out << JSONUtils::indent(indent + 3) << "\"uniformScale\": " << (item.uniformScale ? "true" : "false") << ",\n";
+                    out << JSONUtils::indent(indent + 3) << "\"randomYaw\": " << (item.randomYaw ? "true" : "false") << ",\n";
+                    out << JSONUtils::indent(indent + 3) << "\"alignToNormal\": " << (item.alignToNormal ? "true" : "false") << ",\n";
+                    out << JSONUtils::indent(indent + 3) << "\"maxSlope\": " << item.maxSlope << ",\n";
+                    out << JSONUtils::indent(indent + 3) << "\"sinkOffset\": " << item.sinkOffset << ",\n";
+                    out << JSONUtils::indent(indent + 3) << "\"tint\": " << JSONUtils::vec4ToJson(item.tint) << ",\n";
+                    out << JSONUtils::indent(indent + 3) << "\"collisionShape\": " << static_cast<uint32_t>(item.collisionShape) << ",\n";
+                    out << JSONUtils::indent(indent + 3) << "\"colliderExtents\": " << JSONUtils::vec3ToJson(item.colliderExtents) << ",\n";
+                    out << JSONUtils::indent(indent + 3) << "\"isStatic\": " << (item.isStatic ? "true" : "false") << "\n";
+                    out << JSONUtils::indent(indent + 2) << "}";
+                }
+                out << "\n" << JSONUtils::indent(indent + 1) << "],\n";
+                out << JSONUtils::indent(indent + 1) << "\"layers\": [\n";
+                for (size_t i = 0; i < terrain->layers.size(); ++i) {
+                    const auto& layer = terrain->layers[i];
+                    if (i > 0) out << ",\n";
+                    out << JSONUtils::indent(indent + 2) << "{\n";
+                    out << JSONUtils::indent(indent + 3) << "\"name\": " << JSONUtils::quote(layer.name) << ",\n";
+                    out << JSONUtils::indent(indent + 3) << "\"albedoPath\": " << JSONUtils::quote(layer.albedoPath) << ",\n";
+                    out << JSONUtils::indent(indent + 3) << "\"normalPath\": " << JSONUtils::quote(layer.normalPath) << ",\n";
+                    out << JSONUtils::indent(indent + 3) << "\"tintColor\": " << JSONUtils::vec4ToJson(layer.tintColor) << ",\n";
+                    out << JSONUtils::indent(indent + 3) << "\"uvScale\": " << layer.uvScale << ",\n";
+                    out << JSONUtils::indent(indent + 3) << "\"roughness\": " << layer.roughness << ",\n";
+                    out << JSONUtils::indent(indent + 3) << "\"metallic\": " << layer.metallic << "\n";
+                    out << JSONUtils::indent(indent + 2) << "}";
+                }
+                out << "\n" << JSONUtils::indent(indent + 1) << "],\n";
+                if (terrain->splatmapData.empty()) {
+                    const_cast<Engine::TerrainComponent*>(terrain)->ensureSplatmapAllocated();
+                }
+                if (!terrain->splatmapData.empty()) {
+                    std::string b64 = base64Encode(terrain->splatmapData.data(), terrain->splatmapData.size());
+                    out << JSONUtils::indent(indent + 1) << "\"splatmapBase64\": " << JSONUtils::quote(b64) << ",\n";
+                }
+                if (!terrain->heights.empty()) {
+                    std::string hB64 = base64Encode(
+                        reinterpret_cast<const uint8_t*>(terrain->heights.data()),
+                        terrain->heights.size() * sizeof(float)
+                    );
+                    out << JSONUtils::indent(indent + 1) << "\"heightsBase64\": " << JSONUtils::quote(hB64) << "\n";
+                } else {
+                    out << JSONUtils::indent(indent + 1) << "\"heights\": []\n";
+                }
+                out << JSONUtils::indent(indent) << "}";
+            }
+        },
+        [](Registry& registry, VulkanRenderer&, Entity entity, const std::string& json) {
+            std::string tJson = JSONUtils::extractSubObject(json, "Terrain");
+            if (tJson.empty()) tJson = JSONUtils::extractSubObject(json, "TerrainComponent");
+            if (tJson.empty()) {
+                if (json.find("\"heights\":") != std::string::npos || json.find("\"resolutionX\":") != std::string::npos) {
+                    tJson = json;
+                }
+            }
+            if (tJson.empty()) return;
+
+            if (!registry.has<Engine::TerrainComponent>(entity)) {
+                registry.emplace<Engine::TerrainComponent>(entity, Engine::TerrainComponent{});
+            }
+            if (registry.has<Engine::TilemapComponent>(entity)) {
+                registry.remove<Engine::TilemapComponent>(entity);
+            }
+            if (auto* terrain = registry.get<Engine::TerrainComponent>(entity)) {
+                JSONUtils::extractFloatValue(tJson, "sizeX", terrain->sizeX);
+                JSONUtils::extractFloatValue(tJson, "sizeZ", terrain->sizeZ);
+                float ccX = 0.0f;
+                float ccZ = 0.0f;
+                float cRes = 0.0f;
+                bool hasChunkConfig = false;
+                if (JSONUtils::extractFloatValue(tJson, "chunkCountX", ccX) &&
+                    JSONUtils::extractFloatValue(tJson, "chunkCountZ", ccZ) &&
+                    JSONUtils::extractFloatValue(tJson, "chunkResolution", cRes)) {
+                    terrain->chunkCountX = std::max(1u, static_cast<uint32_t>(ccX));
+                    terrain->chunkCountZ = std::max(1u, static_cast<uint32_t>(ccZ));
+                    terrain->chunkResolution = std::max(2u, static_cast<uint32_t>(cRes));
+                    hasChunkConfig = true;
+                }
+
+                float resX = static_cast<float>(terrain->resolutionX);
+                float resZ = static_cast<float>(terrain->resolutionZ);
+                bool hasResX = JSONUtils::extractFloatValue(tJson, "resolutionX", resX);
+                bool hasResZ = JSONUtils::extractFloatValue(tJson, "resolutionZ", resZ);
+
+                if (!hasChunkConfig) {
+                    // Default to 4x4 grid of 65x65 chunks
+                    terrain->chunkCountX = 4;
+                    terrain->chunkCountZ = 4;
+                    terrain->chunkResolution = 65;
+                }
+                terrain->ensureGridSize();
+
+                bool showBorders = false;
+                if (JSONUtils::extractBoolValue(tJson, "showChunkBorders", showBorders)) {
+                    terrain->showChunkBorders = showBorders;
+                }
+                bool autoScale = true;
+                if (JSONUtils::extractBoolValue(tJson, "autoScaleWithChunks", autoScale)) {
+                    terrain->autoScaleWithChunks = autoScale;
+                }
+
+                JSONUtils::extractFloatValue(tJson, "heightScale", terrain->heightScale);
+                JSONUtils::extractFloatValue(tJson, "uvScale", terrain->uvScale);
+                JSONUtils::extractFloatValue(tJson, "brushRadius", terrain->brushRadius);
+                JSONUtils::extractFloatValue(tJson, "brushStrength", terrain->brushStrength);
+                float bMode = 0.0f;
+                if (JSONUtils::extractFloatValue(tJson, "brushMode", bMode)) terrain->brushMode = static_cast<Engine::TerrainBrushMode>(static_cast<int>(bMode));
+                float bFalloff = 0.0f;
+                if (JSONUtils::extractFloatValue(tJson, "brushFalloff", bFalloff)) terrain->brushFalloff = static_cast<Engine::TerrainBrushFalloff>(static_cast<int>(bFalloff));
+                JSONUtils::extractFloatValue(tJson, "flattenTargetHeight", terrain->flattenTargetHeight);
+                float seedVal = 0.0f;
+                if (JSONUtils::extractFloatValue(tJson, "noiseSeed", seedVal)) terrain->noiseSeed = static_cast<int>(seedVal);
+                JSONUtils::extractFloatValue(tJson, "noiseFrequency", terrain->noiseFrequency);
+                float octVal = 0.0f;
+                if (JSONUtils::extractFloatValue(tJson, "noiseOctaves", octVal)) terrain->noiseOctaves = static_cast<int>(octVal);
+                JSONUtils::extractFloatValue(tJson, "noisePersistence", terrain->noisePersistence);
+                JSONUtils::extractFloatValue(tJson, "noiseLacunarity", terrain->noiseLacunarity);
+
+                float tmVal = 0.0f;
+                if (JSONUtils::extractFloatValue(tJson, "toolMode", tmVal)) terrain->toolMode = static_cast<Engine::TerrainToolMode>(static_cast<int>(tmVal));
+                float aliVal = 0.0f;
+                if (JSONUtils::extractFloatValue(tJson, "activeLayerIndex", aliVal)) terrain->activeLayerIndex = static_cast<int>(aliVal);
+                float smResVal = 0.0f;
+                if (JSONUtils::extractFloatValue(tJson, "splatmapResolution", smResVal)) terrain->splatmapResolution = static_cast<uint32_t>(smResVal);
+
+                bool folEnabled = true;
+                if (JSONUtils::extractBoolValue(tJson, "foliageEnabled", folEnabled)) terrain->foliageEnabled = folEnabled;
+                JSONUtils::extractFloatValue(tJson, "foliageDensity", terrain->foliageDensity);
+                JSONUtils::extractFloatValue(tJson, "foliageMaxDistance", terrain->foliageMaxDistance);
+                JSONUtils::extractFloatValue(tJson, "foliageScaleMin", terrain->foliageScaleMin);
+                JSONUtils::extractFloatValue(tJson, "foliageScaleMax", terrain->foliageScaleMax);
+                JSONUtils::extractFloatValue(tJson, "foliageWindStrength", terrain->foliageWindStrength);
+                float fglVal = 0.0f;
+                if (JSONUtils::extractFloatValue(tJson, "foliageGrassLayer", fglVal)) terrain->foliageGrassLayer = static_cast<int>(fglVal);
+                JSONUtils::extractFloatValue(tJson, "foliageMinWeight", terrain->foliageMinWeight);
+                JSONUtils::extractFloatValue(tJson, "foliageMaxSlope", terrain->foliageMaxSlope);
+                JSONUtils::extractFloatArray(tJson, "foliageTint", &terrain->foliageTint.r, 4);
+                std::string folTex = JSONUtils::extractStringValue(tJson, "foliageTexturePath");
+                if (!folTex.empty()) terrain->foliageTexturePath = folTex;
+                std::string folMesh = JSONUtils::extractStringValue(tJson, "foliageMeshPath");
+                if (!folMesh.empty()) terrain->foliageMeshPath = folMesh;
+                float fbFilterVal = -1.0f;
+                if (JSONUtils::extractFloatValue(tJson, "foliageBrushLayerFilter", fbFilterVal)) terrain->foliageBrushLayerFilter = static_cast<int>(fbFilterVal);
+
+                // Deserialize detailPalette
+                size_t palPos = tJson.find("\"detailPalette\":");
+                if (palPos == std::string::npos) palPos = tJson.find("\"detailPalette\" :");
+                if (palPos != std::string::npos) {
+                    size_t openBracket = tJson.find('[', palPos);
+                    if (openBracket != std::string::npos) {
+                        int bracketCount = 1;
+                        size_t closeBracket = openBracket + 1;
+                        while (closeBracket < tJson.size() && bracketCount > 0) {
+                            if (tJson[closeBracket] == '[') bracketCount++;
+                            else if (tJson[closeBracket] == ']') bracketCount--;
+                            closeBracket++;
+                        }
+                        if (bracketCount == 0) {
+                            std::string arrayContent = tJson.substr(openBracket + 1, closeBracket - openBracket - 2);
+                            std::vector<std::string> palObjs;
+                            size_t p = 0;
+                            while (p < arrayContent.size()) {
+                                size_t objStart = arrayContent.find('{', p);
+                                if (objStart == std::string::npos) break;
+                                int braceCount = 1;
+                                size_t objEnd = objStart + 1;
+                                while (objEnd < arrayContent.size() && braceCount > 0) {
+                                    if (arrayContent[objEnd] == '{') braceCount++;
+                                    else if (arrayContent[objEnd] == '}') braceCount--;
+                                    objEnd++;
+                                }
+                                if (braceCount == 0) {
+                                    palObjs.push_back(arrayContent.substr(objStart, objEnd - objStart));
+                                }
+                                p = objEnd;
+                            }
+                            if (!palObjs.empty()) {
+                                terrain->detailPalette.clear();
+                                for (const auto& pObj : palObjs) {
+                                    Engine::DetailPrototype item{};
+                                    std::string name = JSONUtils::extractStringValue(pObj, "name");
+                                    if (!name.empty()) item.name = name;
+                                    JSONUtils::extractBoolValue(pObj, "enabled", item.enabled);
+                                    float tVal = 0.0f;
+                                    if (JSONUtils::extractFloatValue(pObj, "type", tVal)) item.type = static_cast<Engine::DetailType>(static_cast<uint32_t>(tVal));
+                                    float tlVal = -1.0f;
+                                    if (JSONUtils::extractFloatValue(pObj, "targetLayer", tlVal)) item.targetLayer = static_cast<int>(tlVal);
+                                    item.meshPath = JSONUtils::extractStringValue(pObj, "meshPath");
+                                    item.texturePath = JSONUtils::extractStringValue(pObj, "texturePath");
+                                    item.prefabPath = JSONUtils::extractStringValue(pObj, "prefabPath");
+                                    JSONUtils::extractFloatValue(pObj, "density", item.density);
+                                    JSONUtils::extractFloatValue(pObj, "scaleMin", item.scaleMin);
+                                    JSONUtils::extractFloatValue(pObj, "scaleMax", item.scaleMax);
+                                    JSONUtils::extractBoolValue(pObj, "uniformScale", item.uniformScale);
+                                    JSONUtils::extractBoolValue(pObj, "randomYaw", item.randomYaw);
+                                    JSONUtils::extractBoolValue(pObj, "alignToNormal", item.alignToNormal);
+                                    JSONUtils::extractFloatValue(pObj, "maxSlope", item.maxSlope);
+                                    JSONUtils::extractFloatValue(pObj, "sinkOffset", item.sinkOffset);
+                                    JSONUtils::extractFloatArray(pObj, "tint", &item.tint.r, 4);
+                                    float csVal = 0.0f;
+                                    if (JSONUtils::extractFloatValue(pObj, "collisionShape", csVal)) item.collisionShape = static_cast<Engine::DetailCollisionShape>(static_cast<uint32_t>(csVal));
+                                    JSONUtils::extractFloatArray(pObj, "colliderExtents", &item.colliderExtents.x, 3);
+                                    JSONUtils::extractBoolValue(pObj, "isStatic", item.isStatic);
+                                    terrain->detailPalette.push_back(item);
+                                }
+                            }
+                        }
+                    }
+                }
+                terrain->initDefaultPalette();
+                terrain->foliageNeedsRebuild = true;
+
+                size_t layersPos = tJson.find("\"layers\":");
+                if (layersPos == std::string::npos) layersPos = tJson.find("\"layers\" :");
+                if (layersPos != std::string::npos) {
+                    size_t openBracket = tJson.find('[', layersPos);
+                    if (openBracket != std::string::npos) {
+                        int bracketCount = 1;
+                        size_t closeBracket = openBracket + 1;
+                        while (closeBracket < tJson.size() && bracketCount > 0) {
+                            if (tJson[closeBracket] == '[') bracketCount++;
+                            else if (tJson[closeBracket] == ']') bracketCount--;
+                            closeBracket++;
+                        }
+                        if (bracketCount == 0) {
+                            std::string arrayContent = tJson.substr(openBracket + 1, closeBracket - openBracket - 2);
+                            std::vector<std::string> layerObjs;
+                            size_t p = 0;
+                            while (p < arrayContent.size()) {
+                                size_t objStart = arrayContent.find('{', p);
+                                if (objStart == std::string::npos) break;
+                                int braceCount = 1;
+                                size_t objEnd = objStart + 1;
+                                while (objEnd < arrayContent.size() && braceCount > 0) {
+                                    if (arrayContent[objEnd] == '{') braceCount++;
+                                    else if (arrayContent[objEnd] == '}') braceCount--;
+                                    objEnd++;
+                                }
+                                if (braceCount == 0) {
+                                    layerObjs.push_back(arrayContent.substr(objStart, objEnd - objStart));
+                                }
+                                p = objEnd;
+                            }
+                            for (size_t i = 0; i < std::min(layerObjs.size(), terrain->layers.size()); ++i) {
+                                const std::string& lObj = layerObjs[i];
+                                std::string name = JSONUtils::extractStringValue(lObj, "name");
+                                if (!name.empty()) terrain->layers[i].name = name;
+                                terrain->layers[i].albedoPath = JSONUtils::extractStringValue(lObj, "albedoPath");
+                                terrain->layers[i].normalPath = JSONUtils::extractStringValue(lObj, "normalPath");
+                                JSONUtils::extractFloatArray(lObj, "tintColor", &terrain->layers[i].tintColor.r, 4);
+                                JSONUtils::extractFloatValue(lObj, "uvScale", terrain->layers[i].uvScale);
+                                JSONUtils::extractFloatValue(lObj, "roughness", terrain->layers[i].roughness);
+                                JSONUtils::extractFloatValue(lObj, "metallic", terrain->layers[i].metallic);
+                            }
+                        }
+                    }
+                }
+
+                std::string splatB64 = JSONUtils::extractStringValue(tJson, "splatmapBase64");
+                if (!splatB64.empty()) {
+                    std::vector<uint8_t> decoded = base64Decode(splatB64);
+                    if (decoded.size() == static_cast<size_t>(terrain->splatmapResolution) * terrain->splatmapResolution * 4) {
+                        terrain->splatmapData = std::move(decoded);
+                        terrain->splatmapDirty = true;
+                    }
+                } else {
+                    terrain->ensureSplatmapAllocated();
+                }
+                terrain->layersDirty = true;
+
+                size_t expectedSize = static_cast<size_t>(terrain->resolutionX) * terrain->resolutionZ;
+                bool heightsLoaded = false;
+                std::string heightsB64 = JSONUtils::extractStringValue(tJson, "heightsBase64");
+                if (!heightsB64.empty()) {
+                    std::vector<uint8_t> decoded = base64Decode(heightsB64);
+                    if (decoded.size() == expectedSize * sizeof(float)) {
+                        terrain->heights.resize(expectedSize);
+                        std::memcpy(terrain->heights.data(), decoded.data(), decoded.size());
+                        heightsLoaded = true;
+                    } else if (!decoded.empty() && (decoded.size() % sizeof(float) == 0)) {
+                        size_t floatCount = decoded.size() / sizeof(float);
+                        terrain->heights.resize(floatCount);
+                        std::memcpy(terrain->heights.data(), decoded.data(), decoded.size());
+                        heightsLoaded = true;
+                    }
+                }
+
+                if (!heightsLoaded) {
+                    size_t heightsPos = tJson.find("\"heights\":");
+                    if (heightsPos == std::string::npos) heightsPos = tJson.find("\"heights\" :");
+                    if (heightsPos != std::string::npos) {
+                        size_t openBracket = tJson.find('[', heightsPos);
+                        size_t closeBracket = tJson.find(']', openBracket);
+                        if (openBracket != std::string::npos && closeBracket != std::string::npos) {
+                            std::string arrayStr = tJson.substr(openBracket + 1, closeBracket - openBracket - 1);
+                            std::stringstream ss(arrayStr);
+                            std::string item;
+                            std::vector<float> loadedHeights;
+                            while (std::getline(ss, item, ',')) {
+                                item.erase(0, item.find_first_not_of(" \t\n\r"));
+                                item.erase(item.find_last_not_of(" \t\n\r") + 1);
+                                if (!item.empty()) {
+                                    try {
+                                        loadedHeights.push_back(std::stof(item));
+                                    } catch (...) {}
+                                }
+                            }
+
+                            if (loadedHeights.size() == expectedSize) {
+                                terrain->heights = std::move(loadedHeights);
+                                heightsLoaded = true;
+                            } else if (!loadedHeights.empty()) {
+                                // Resample from legacy resolution (e.g. 256x256 to 257x257)
+                                uint32_t oldW = (hasResX && resX > 1) ? static_cast<uint32_t>(resX) : 0;
+                                uint32_t oldH = (hasResZ && resZ > 1) ? static_cast<uint32_t>(resZ) : 0;
+                                if (oldW == 0 || oldH == 0 || loadedHeights.size() != static_cast<size_t>(oldW) * oldH) {
+                                    oldW = static_cast<uint32_t>(std::sqrt(loadedHeights.size()));
+                                    oldH = oldW;
+                                }
+
+                                terrain->heights.assign(expectedSize, 0.0f);
+                                if (oldW > 1 && oldH > 1 && loadedHeights.size() == static_cast<size_t>(oldW) * oldH) {
+                                    for (uint32_t gz = 0; gz < terrain->resolutionZ; ++gz) {
+                                        float v = static_cast<float>(gz) / static_cast<float>(terrain->resolutionZ - 1);
+                                        float oldY = v * static_cast<float>(oldH - 1);
+                                        uint32_t y0 = std::min(static_cast<uint32_t>(std::floor(oldY)), oldH - 1);
+                                        uint32_t y1 = std::min(y0 + 1, oldH - 1);
+                                        float fy = oldY - static_cast<float>(y0);
+
+                                        for (uint32_t gx = 0; gx < terrain->resolutionX; ++gx) {
+                                            float u = static_cast<float>(gx) / static_cast<float>(terrain->resolutionX - 1);
+                                            float oldX = u * static_cast<float>(oldW - 1);
+                                            uint32_t x0 = std::min(static_cast<uint32_t>(std::floor(oldX)), oldW - 1);
+                                            uint32_t x1 = std::min(x0 + 1, oldW - 1);
+                                            float fx = oldX - static_cast<float>(x0);
+
+                                            float h00 = loadedHeights[y0 * oldW + x0];
+                                            float h10 = loadedHeights[y0 * oldW + x1];
+                                            float h01 = loadedHeights[y1 * oldW + x0];
+                                            float h11 = loadedHeights[y1 * oldW + x1];
+
+                                            float h = (h00 * (1.0f - fx) + h10 * fx) * (1.0f - fy) +
+                                                      (h01 * (1.0f - fx) + h11 * fx) * fy;
+                                            terrain->heights[gz * terrain->resolutionX + gx] = h;
+                                        }
+                                    }
+                                    heightsLoaded = true;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (!heightsLoaded && terrain->heights.size() != expectedSize) {
+                    terrain->heights.assign(expectedSize, 0.0f);
+                }
+
+                terrain->recalculateBounds();
+                terrain->isMeshInitialized = false;
+                terrain->markFullDirty();
             }
         }
     );
+
+    // 7. Light Component Serializer
+    reg.registerComponent(
+        "Light",
+        [](Registry& registry, Entity entity, std::ostream& out, int indent) {
+            if (auto* light = registry.get<Engine::LightComponent>(entity)) {
+                const char* typeStr = "Directional";
+                if (light->type == Engine::LightType::Point) typeStr = "Point";
+                else if (light->type == Engine::LightType::Spot) typeStr = "Spot";
+
+                out << JSONUtils::indent(indent) << "\"Light\": {\n";
+                out << JSONUtils::indent(indent + 1) << "\"type\": " << JSONUtils::quote(typeStr) << ",\n";
+                out << JSONUtils::indent(indent + 1) << "\"direction\": " << JSONUtils::vec3ToJson(light->direction) << ",\n";
+                out << JSONUtils::indent(indent + 1) << "\"pitch\": " << light->pitch << ",\n";
+                out << JSONUtils::indent(indent + 1) << "\"yaw\": " << light->yaw << ",\n";
+                out << JSONUtils::indent(indent + 1) << "\"color\": " << JSONUtils::vec3ToJson(light->color) << ",\n";
+                out << JSONUtils::indent(indent + 1) << "\"intensity\": " << light->intensity << ",\n";
+                out << JSONUtils::indent(indent + 1) << "\"range\": " << light->range << ",\n";
+                out << JSONUtils::indent(indent + 1) << "\"castShadows\": " << (light->castShadows ? "true" : "false") << ",\n";
+                out << JSONUtils::indent(indent + 1) << "\"shadowBias\": " << light->shadowBias << ",\n";
+                out << JSONUtils::indent(indent + 1) << "\"shadowNormalBias\": " << light->shadowNormalBias << ",\n";
+                out << JSONUtils::indent(indent + 1) << "\"shadowDistance\": " << light->shadowDistance << "\n";
+                out << JSONUtils::indent(indent) << "}";
+            }
+        },
+        [](Registry& registry, VulkanRenderer&, Entity entity, const std::string& json) {
+            std::string lightJson = JSONUtils::extractSubObject(json, "Light");
+            if (lightJson.empty()) lightJson = JSONUtils::extractSubObject(json, "LightComponent");
+
+            if (lightJson.empty()) {
+                if (json.find("\"name\":") == std::string::npos && json.find("\"id\":") == std::string::npos) {
+                    // Direct inner component JSON passed without outer key
+                    if (json.find("\"color\"") != std::string::npos ||
+                        json.find("\"direction\"") != std::string::npos ||
+                        json.find("\"intensity\"") != std::string::npos ||
+                        json.find("\"range\"") != std::string::npos ||
+                        json.find("\"type\"") != std::string::npos) {
+                        lightJson = json;
+                    }
+                } else {
+                    // Flat/legacy full entity format: only if entityType is Light
+                    std::string entityTypeStr = JSONUtils::extractStringValue(json, "entityType");
+                    if (entityTypeStr == "Light" || entityTypeStr == "LightComponent" ||
+                        json.find("\"hasLight\":") != std::string::npos ||
+                        json.find("\"hasLightComponent\":") != std::string::npos) {
+                        lightJson = json;
+                    }
+                }
+            }
+
+            if (lightJson.empty()) return;
+
+            if (!registry.has<Engine::LightComponent>(entity)) {
+                registry.emplace<Engine::LightComponent>(entity, Engine::LightComponent{});
+            }
+            if (auto* light = registry.get<Engine::LightComponent>(entity)) {
+                std::string typeStr = JSONUtils::extractStringValue(lightJson, "type");
+                if (!typeStr.empty()) {
+                    if (typeStr == "Point") light->type = Engine::LightType::Point;
+                    else if (typeStr == "Spot") light->type = Engine::LightType::Spot;
+                    else light->type = Engine::LightType::Directional;
+                } else {
+                    float fType = 0.0f;
+                    if (JSONUtils::extractFloatValue(lightJson, "type", fType)) {
+                        light->type = static_cast<Engine::LightType>(static_cast<int>(fType));
+                    }
+                }
+                bool hasDir = JSONUtils::extractFloatArray(lightJson, "direction", &light->direction.x, 3);
+                bool hasPitch = JSONUtils::extractFloatValue(lightJson, "pitch", light->pitch);
+                bool hasYaw = JSONUtils::extractFloatValue(lightJson, "yaw", light->yaw);
+                if (hasPitch || hasYaw) {
+                    light->updateDirectionFromAngles();
+                } else if (hasDir) {
+                    light->updateAnglesFromDirection();
+                }
+                JSONUtils::extractFloatArray(lightJson, "color", &light->color.x, 3);
+                JSONUtils::extractFloatValue(lightJson, "intensity", light->intensity);
+                JSONUtils::extractFloatValue(lightJson, "range", light->range);
+                JSONUtils::extractBoolValue(lightJson, "castShadows", light->castShadows);
+                JSONUtils::extractFloatValue(lightJson, "shadowBias", light->shadowBias);
+                JSONUtils::extractFloatValue(lightJson, "shadowNormalBias", light->shadowNormalBias);
+                JSONUtils::extractFloatValue(lightJson, "shadowDistance", light->shadowDistance);
+            }
+        }
+    );
+
+    // 8. GridWorld Component Serializer
+    reg.registerComponent(
+        "GridWorld",
+        [](Registry& registry, Entity entity, std::ostream& out, int indent) {
+            if (auto* grid = registry.get<Engine::GridWorldComponent>(entity)) {
+                out << ",\n" << JSONUtils::indent(indent) << "\"entityType\": " << JSONUtils::quote("Grid World") << ",\n";
+                out << JSONUtils::indent(indent) << "\"cellSize\": " << grid->cellSize << ",\n";
+                out << JSONUtils::indent(indent) << "\"cellHeight\": " << grid->cellHeight << ",\n";
+                out << JSONUtils::indent(indent) << "\"originOffset\": [" << grid->originOffset.x << ", " << grid->originOffset.y << ", " << grid->originOffset.z << "],\n";
+                out << JSONUtils::indent(indent) << "\"showGridOverlay\": " << (grid->showGridOverlay ? "true" : "false") << ",\n";
+                out << JSONUtils::indent(indent) << "\"showCursorHover\": " << (grid->showCursorHover ? "true" : "false") << ",\n";
+                out << JSONUtils::indent(indent) << "\"gridLineColor\": [" << grid->gridLineColor.r << ", " << grid->gridLineColor.g << ", " << grid->gridLineColor.b << ", " << grid->gridLineColor.a << "],\n";
+                out << JSONUtils::indent(indent) << "\"cursorHoverColor\": [" << grid->cursorHoverColor.r << ", " << grid->cursorHoverColor.g << ", " << grid->cursorHoverColor.b << ", " << grid->cursorHoverColor.a << "],\n";
+                out << JSONUtils::indent(indent) << "\"chunks\": [\n";
+
+                bool firstChunk = true;
+                for (const auto& [key, chunk] : grid->chunks) {
+                    if (!chunk.hasModifications) continue;
+                    int cx, cz;
+                    Engine::unpackGridChunkKey(key, cx, cz);
+
+                    if (!firstChunk) out << ",\n";
+                    firstChunk = false;
+
+                    out << JSONUtils::indent(indent + 1) << "{\n";
+                    out << JSONUtils::indent(indent + 2) << "\"cx\": " << cx << ",\n";
+                    out << JSONUtils::indent(indent + 2) << "\"cz\": " << cz << ",\n";
+                    out << JSONUtils::indent(indent + 2) << "\"cells\": [\n";
+
+                    bool firstCell = true;
+                    for (int ly = 0; ly < Engine::GRID_CHUNK_HEIGHT; ++ly) {
+                        for (int lz = 0; lz < Engine::GRID_CHUNK_LENGTH; ++lz) {
+                            for (int lx = 0; lx < Engine::GRID_CHUNK_WIDTH; ++lx) {
+                                const auto& c = chunk.at(lx, ly, lz);
+                                if (c.flags != (Engine::GridCell_Buildable | Engine::GridCell_Walkable) ||
+                                    c.surfaceType != 0 || c.elevationLevel != 0 || c.occupantId != 0 ||
+                                    c.customData[0] != 0 || c.customData[1] != 0 || c.customData[2] != 0 || c.customData[3] != 0) {
+                                    if (!firstCell) out << ",\n";
+                                    firstCell = false;
+                                    out << JSONUtils::indent(indent + 3) << "{"
+                                        << "\"x\":" << lx << ",\"y\":" << ly << ",\"z\":" << lz
+                                        << ",\"f\":" << c.flags
+                                        << ",\"s\":" << c.surfaceType
+                                        << ",\"e\":" << c.elevationLevel
+                                        << ",\"occ\":" << c.occupantId
+                                        << ",\"d\":[" << static_cast<int>(c.customData[0]) << "," << static_cast<int>(c.customData[1]) << "," << static_cast<int>(c.customData[2]) << "," << static_cast<int>(c.customData[3]) << "]"
+                                        << "}";
+                                }
+                            }
+                        }
+                    }
+                    out << "\n" << JSONUtils::indent(indent + 2) << "]\n";
+                    out << JSONUtils::indent(indent + 1) << "}";
+                }
+
+                out << "\n" << JSONUtils::indent(indent) << "]\n";
+            }
+        },
+        [](Registry& registry, VulkanRenderer&, Entity entity, const std::string& json) {
+            std::string gridJson = JSONUtils::extractSubObject(json, "GridWorld");
+            if (gridJson.empty()) gridJson = JSONUtils::extractSubObject(json, "GridWorldComponent");
+            if (gridJson.empty()) gridJson = json;
+
+            std::string type = JSONUtils::extractStringValue(json, "entityType");
+            if (type == "Grid World" || json.find("\"cellSize\":") != std::string::npos || json.find("\"chunks\":") != std::string::npos) {
+                if (!registry.has<Engine::GridWorldComponent>(entity)) {
+                    registry.emplace<Engine::GridWorldComponent>(entity, Engine::GridWorldComponent{});
+                }
+
+                if (auto* grid = registry.get<Engine::GridWorldComponent>(entity)) {
+                    JSONUtils::extractFloatValue(gridJson, "cellSize", grid->cellSize);
+                    JSONUtils::extractFloatValue(gridJson, "cellHeight", grid->cellHeight);
+                    float off[3] = { 0.f, 0.f, 0.f };
+                    if (JSONUtils::extractFloatArray(gridJson, "originOffset", off, 3)) {
+                        grid->originOffset = glm::vec3(off[0], off[1], off[2]);
+                    }
+                    JSONUtils::extractBoolValue(gridJson, "showGridOverlay", grid->showGridOverlay);
+                    JSONUtils::extractBoolValue(gridJson, "showCursorHover", grid->showCursorHover);
+                    float glCol[4] = { 0.35f, 0.7f, 1.0f, 0.3f };
+                    if (JSONUtils::extractFloatArray(gridJson, "gridLineColor", glCol, 4)) {
+                        grid->gridLineColor = glm::vec4(glCol[0], glCol[1], glCol[2], glCol[3]);
+                    }
+                    float curCol[4] = { 0.2f, 1.0f, 0.45f, 0.65f };
+                    if (JSONUtils::extractFloatArray(gridJson, "cursorHoverColor", curCol, 4)) {
+                        grid->cursorHoverColor = glm::vec4(curCol[0], curCol[1], curCol[2], curCol[3]);
+                    }
+
+                    // Parse chunks with bracketDepth and braceDepth matching
+                    size_t chunksPos = gridJson.find("\"chunks\":");
+                    if (chunksPos == std::string::npos) chunksPos = gridJson.find("\"chunks\" :");
+                    if (chunksPos != std::string::npos) {
+                        size_t openBracket = gridJson.find('[', chunksPos);
+                        if (openBracket != std::string::npos) {
+                            int bracketDepth = 1;
+                            size_t closeBracket = openBracket + 1;
+                            while (closeBracket < gridJson.size() && bracketDepth > 0) {
+                                if (gridJson[closeBracket] == '[') bracketDepth++;
+                                else if (gridJson[closeBracket] == ']') bracketDepth--;
+                                closeBracket++;
+                            }
+                            if (bracketDepth == 0) {
+                                std::string chunksArray = gridJson.substr(openBracket + 1, (closeBracket - 1) - openBracket - 1);
+                                size_t cSearch = 0;
+                                while (cSearch < chunksArray.size()) {
+                                    size_t chunkStart = chunksArray.find('{', cSearch);
+                                    if (chunkStart == std::string::npos) break;
+
+                                    int chunkBraceDepth = 1;
+                                    size_t chunkEnd = chunkStart + 1;
+                                    while (chunkEnd < chunksArray.size() && chunkBraceDepth > 0) {
+                                        if (chunksArray[chunkEnd] == '{') chunkBraceDepth++;
+                                        else if (chunksArray[chunkEnd] == '}') chunkBraceDepth--;
+                                        chunkEnd++;
+                                    }
+                                    if (chunkBraceDepth != 0) break;
+
+                                    std::string chunkStr = chunksArray.substr(chunkStart, chunkEnd - chunkStart);
+                                    float cxVal = 0.0f, czVal = 0.0f;
+                                    JSONUtils::extractFloatValue(chunkStr, "cx", cxVal);
+                                    JSONUtils::extractFloatValue(chunkStr, "cz", czVal);
+                                    int cx = static_cast<int>(cxVal);
+                                    int cz = static_cast<int>(czVal);
+
+                                    int64_t key = Engine::packGridChunkKey(cx, cz);
+                                    auto& chunk = grid->chunks[key];
+                                    chunk.hasModifications = true;
+                                    chunk.isDirty = true;
+
+                                    size_t cellsPos = chunkStr.find("\"cells\":");
+                                    if (cellsPos == std::string::npos) cellsPos = chunkStr.find("\"cells\" :");
+                                    if (cellsPos != std::string::npos) {
+                                        size_t cellsOpen = chunkStr.find('[', cellsPos);
+                                        if (cellsOpen != std::string::npos) {
+                                            int cellsBracketDepth = 1;
+                                            size_t cellsClose = cellsOpen + 1;
+                                            while (cellsClose < chunkStr.size() && cellsBracketDepth > 0) {
+                                                if (chunkStr[cellsClose] == '[') cellsBracketDepth++;
+                                                else if (chunkStr[cellsClose] == ']') cellsBracketDepth--;
+                                                cellsClose++;
+                                            }
+                                            if (cellsBracketDepth == 0) {
+                                                std::string cellsArray = chunkStr.substr(cellsOpen + 1, (cellsClose - 1) - cellsOpen - 1);
+                                                size_t cellSearch = 0;
+                                                while (cellSearch < cellsArray.size()) {
+                                                    size_t cellStart = cellsArray.find('{', cellSearch);
+                                                    if (cellStart == std::string::npos) break;
+
+                                                    int cellBraceDepth = 1;
+                                                    size_t cellEnd = cellStart + 1;
+                                                    while (cellEnd < cellsArray.size() && cellBraceDepth > 0) {
+                                                        if (cellsArray[cellEnd] == '{') cellBraceDepth++;
+                                                        else if (cellsArray[cellEnd] == '}') cellBraceDepth--;
+                                                        cellEnd++;
+                                                    }
+                                                    if (cellBraceDepth != 0) break;
+
+                                                    std::string cellStr = cellsArray.substr(cellStart, cellEnd - cellStart);
+                                                    float lx = 0.f, ly = 0.f, lz = 0.f, fl = 0.f, sf = 0.f, el = 0.f, occ = 0.f;
+                                                    JSONUtils::extractFloatValue(cellStr, "x", lx);
+                                                    JSONUtils::extractFloatValue(cellStr, "y", ly);
+                                                    JSONUtils::extractFloatValue(cellStr, "z", lz);
+                                                    JSONUtils::extractFloatValue(cellStr, "f", fl);
+                                                    JSONUtils::extractFloatValue(cellStr, "s", sf);
+                                                    JSONUtils::extractFloatValue(cellStr, "e", el);
+                                                    JSONUtils::extractFloatValue(cellStr, "occ", occ);
+
+                                                    int ilx = std::clamp(static_cast<int>(lx), 0, Engine::GRID_CHUNK_WIDTH - 1);
+                                                    int ily = std::clamp(static_cast<int>(ly), 0, Engine::GRID_CHUNK_HEIGHT - 1);
+                                                    int ilz = std::clamp(static_cast<int>(lz), 0, Engine::GRID_CHUNK_LENGTH - 1);
+
+                                                    auto& cell = chunk.at(ilx, ily, ilz);
+                                                    cell.flags = static_cast<uint32_t>(fl);
+                                                    cell.surfaceType = static_cast<uint16_t>(sf);
+                                                    cell.elevationLevel = static_cast<int16_t>(el);
+                                                    cell.occupantId = static_cast<uint32_t>(occ);
+
+                                                    float dArr[4] = { 0.f, 0.f, 0.f, 0.f };
+                                                    if (JSONUtils::extractFloatArray(cellStr, "d", dArr, 4)) {
+                                                        cell.customData[0] = static_cast<uint8_t>(dArr[0]);
+                                                        cell.customData[1] = static_cast<uint8_t>(dArr[1]);
+                                                        cell.customData[2] = static_cast<uint8_t>(dArr[2]);
+                                                        cell.customData[3] = static_cast<uint8_t>(dArr[3]);
+                                                    }
+
+                                                    cellSearch = cellEnd;
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    cSearch = chunkEnd;
+                                }
+                            }
+                        }
+                    }
+                    grid->isDirty = true;
+                }
+            }
+        }
+    );
+
     return true;
 }
 
@@ -1178,7 +1991,8 @@ void syncReflectionSerializers() {
 
         bool alreadyRegistered = false;
         for (const auto& regComp : currentRegs) {
-            if (regComp.componentName == refl.name) {
+            if (regComp.componentName == refl.name ||
+                ((refl.name == "GridWorld" || refl.name == "GridWorldComponent") && (regComp.componentName == "GridWorld" || regComp.componentName == "GridWorldComponent"))) {
                 alreadyRegistered = true;
                 break;
             }
@@ -1193,44 +2007,57 @@ void syncReflectionSerializers() {
                     if (!compPtr) return;
                     out << JSONUtils::indent(indent) << "\"" << refl.name << "\": {\n";
 
-                    bool firstField = true;
-                    for (const auto& field : refl.fields) {
-                        char* fieldPtr = static_cast<char*>(compPtr) + field.offset;
-                        if (!firstField) out << ",\n";
-                        firstField = false;
+                    std::function<void(const std::vector<Engine::ComponentField>&, void*, int)> writeReflectedFields =
+                        [&](const std::vector<Engine::ComponentField>& fields, void* parentPtr, int curIndent) {
+                            bool firstField = true;
+                            for (const auto& field : fields) {
+                                char* fieldPtr = static_cast<char*>(parentPtr) + field.offset;
+                                if (!firstField) out << ",\n";
+                                firstField = false;
 
-                        out << JSONUtils::indent(indent + 1) << "\"" << field.name << "\": ";
-                        if (field.type == Engine::FieldType::Float) {
-                            out << *reinterpret_cast<float*>(fieldPtr);
-                        } else if (field.type == Engine::FieldType::Int) {
-                            out << *reinterpret_cast<int*>(fieldPtr);
-                        } else if (field.type == Engine::FieldType::Bool) {
-                            out << (*reinterpret_cast<bool*>(fieldPtr) ? "1.0" : "0.0");
-                        } else if (field.type == Engine::FieldType::Vec3) {
-                            out << JSONUtils::vec3ToJson(*reinterpret_cast<glm::vec3*>(fieldPtr));
-                        } else if (field.type == Engine::FieldType::Enum) {
-                            out << *reinterpret_cast<int*>(fieldPtr);
-                        } else if (field.type == Engine::FieldType::RigidBodyType) {
-                            std::string typeStr = (*reinterpret_cast<RigidBodyType*>(fieldPtr) == RigidBodyType::Static) ? "Static" : "Dynamic";
-                            out << JSONUtils::quote(typeStr);
-                        } else if (field.type == Engine::FieldType::Entity) {
-                            out << static_cast<float>(reinterpret_cast<Entity*>(fieldPtr)->getId());
-                        } else if (field.type == Engine::FieldType::String) {
-                            out << JSONUtils::quote(*reinterpret_cast<std::string*>(fieldPtr));
-                        } else if (field.type == Engine::FieldType::Vec2) {
-                            glm::vec2* v = reinterpret_cast<glm::vec2*>(fieldPtr);
-                            out << "[" << v->x << ", " << v->y << "]";
-                        } else if (field.type == Engine::FieldType::Vec4) {
-                            out << JSONUtils::vec4ToJson(*reinterpret_cast<glm::vec4*>(fieldPtr));
-                        }
-                    }
+                                out << JSONUtils::indent(curIndent) << "\"" << field.name << "\": ";
+                                if (field.type == Engine::FieldType::Struct) {
+                                    out << "{\n";
+                                    writeReflectedFields(field.subFields, fieldPtr, curIndent + 1);
+                                    out << "\n" << JSONUtils::indent(curIndent) << "}";
+                                } else if (field.type == Engine::FieldType::Float) {
+                                    out << *reinterpret_cast<float*>(fieldPtr);
+                                } else if (field.type == Engine::FieldType::Int) {
+                                    out << *reinterpret_cast<int*>(fieldPtr);
+                                } else if (field.type == Engine::FieldType::Bool) {
+                                    out << (*reinterpret_cast<bool*>(fieldPtr) ? "1.0" : "0.0");
+                                } else if (field.type == Engine::FieldType::Vec3) {
+                                    out << JSONUtils::vec3ToJson(*reinterpret_cast<glm::vec3*>(fieldPtr));
+                                } else if (field.type == Engine::FieldType::Enum) {
+                                    int val = *reinterpret_cast<int*>(fieldPtr);
+                                    if (!field.enumOptions.empty() && val >= 0 && val < static_cast<int>(field.enumOptions.size())) {
+                                        out << JSONUtils::quote(field.enumOptions[val]);
+                                    } else {
+                                        out << val;
+                                    }
+                                } else if (field.type == Engine::FieldType::RigidBodyType) {
+                                    std::string typeStr = (*reinterpret_cast<RigidBodyType*>(fieldPtr) == RigidBodyType::Static) ? "Static" : "Dynamic";
+                                    out << JSONUtils::quote(typeStr);
+                                } else if (field.type == Engine::FieldType::Entity) {
+                                    out << static_cast<float>(reinterpret_cast<Entity*>(fieldPtr)->getId());
+                                } else if (field.type == Engine::FieldType::String) {
+                                    out << JSONUtils::quote(*reinterpret_cast<std::string*>(fieldPtr));
+                                } else if (field.type == Engine::FieldType::Vec2) {
+                                    glm::vec2* v = reinterpret_cast<glm::vec2*>(fieldPtr);
+                                    out << "[" << v->x << ", " << v->y << "]";
+                                } else if (field.type == Engine::FieldType::Vec4) {
+                                    out << JSONUtils::vec4ToJson(*reinterpret_cast<glm::vec4*>(fieldPtr));
+                                }
+                            }
+                        };
+
+                    writeReflectedFields(refl.fields, compPtr, indent + 1);
 
                     if (refl.name == "Inventory") {
                         struct TempItem { std::string id; std::string name; int count; };
                         struct TempInv { std::vector<TempItem> items; int maxSlots; };
                         auto* inv = reinterpret_cast<TempInv*>(compPtr);
-                        if (!firstField) out << ",\n";
-                        firstField = false;
+                        out << ",\n";
                         out << JSONUtils::indent(indent + 1) << "\"items\": [\n";
                         for (size_t i = 0; i < inv->items.size(); ++i) {
                             if (i > 0) out << ",\n";
@@ -1241,6 +2068,24 @@ void syncReflectionSerializers() {
                             out << JSONUtils::indent(indent + 2) << "}";
                         }
                         out << "\n" << JSONUtils::indent(indent + 1) << "]";
+                    }
+
+                    if (refl.name == "Terrain") {
+                        auto* terrain = reinterpret_cast<Engine::TerrainComponent*>(compPtr);
+                        out << ",\n";
+                        out << JSONUtils::indent(indent + 1) << "\"resolutionX\": " << terrain->resolutionX << ",\n";
+                        out << JSONUtils::indent(indent + 1) << "\"resolutionZ\": " << terrain->resolutionZ << ",\n";
+                        out << JSONUtils::indent(indent + 1) << "\"noiseFrequency\": " << terrain->noiseFrequency << ",\n";
+                        out << JSONUtils::indent(indent + 1) << "\"noiseOctaves\": " << terrain->noiseOctaves << ",\n";
+                        out << JSONUtils::indent(indent + 1) << "\"noisePersistence\": " << terrain->noisePersistence << ",\n";
+                        out << JSONUtils::indent(indent + 1) << "\"noiseLacunarity\": " << terrain->noiseLacunarity << ",\n";
+                        out << JSONUtils::indent(indent + 1) << "\"noiseSeed\": " << terrain->noiseSeed << ",\n";
+                        out << JSONUtils::indent(indent + 1) << "\"heights\": [";
+                        for (size_t i = 0; i < terrain->heights.size(); ++i) {
+                            if (i > 0) out << ",";
+                            out << terrain->heights[i];
+                        }
+                        out << "]";
                     }
 
                     out << "\n" << JSONUtils::indent(indent) << "}";
@@ -1282,64 +2127,93 @@ void syncReflectionSerializers() {
                     }
                     void* compPtr = refl.get(registry, entity);
                     if (!compPtr) return;
-                    for (const auto& field : refl.fields) {
-                        char* fieldPtr = static_cast<char*>(compPtr) + field.offset;
-                        if (field.type == Engine::FieldType::Float) {
-                            JSONUtils::extractFloatValue(compJson, field.name, *reinterpret_cast<float*>(fieldPtr));
-                        } else if (field.type == Engine::FieldType::Int || field.type == Engine::FieldType::Enum) {
-                            float fVal = 0.0f;
-                            if (JSONUtils::extractFloatValue(compJson, field.name, fVal)) {
-                                *reinterpret_cast<int*>(fieldPtr) = static_cast<int>(fVal);
-                            }
-                        } else if (field.type == Engine::FieldType::Bool) {
-                            float fVal = 0.0f;
-                            if (JSONUtils::extractFloatValue(compJson, field.name, fVal)) {
-                                *reinterpret_cast<bool*>(fieldPtr) = (fVal > 0.5f);
-                            } else {
-                                if (compJson.find("\"" + field.name + "\": true") != std::string::npos ||
-                                    compJson.find("\"" + field.name + "\":true") != std::string::npos) {
-                                    *reinterpret_cast<bool*>(fieldPtr) = true;
-                                } else if (compJson.find("\"" + field.name + "\": false") != std::string::npos ||
-                                           compJson.find("\"" + field.name + "\":false") != std::string::npos) {
-                                    *reinterpret_cast<bool*>(fieldPtr) = false;
+
+                    std::function<void(const std::vector<Engine::ComponentField>&, void*, const std::string&)> readReflectedFields =
+                        [&](const std::vector<Engine::ComponentField>& fields, void* parentPtr, const std::string& currentJson) {
+                            for (const auto& field : fields) {
+                                char* fieldPtr = static_cast<char*>(parentPtr) + field.offset;
+                                if (field.type == Engine::FieldType::Struct) {
+                                    std::string subObjJson = JSONUtils::extractSubObject(currentJson, field.name);
+                                    if (!subObjJson.empty()) {
+                                        readReflectedFields(field.subFields, fieldPtr, subObjJson);
+                                    }
+                                } else if (field.type == Engine::FieldType::Float) {
+                                    JSONUtils::extractFloatValue(currentJson, field.name, *reinterpret_cast<float*>(fieldPtr));
+                                } else if (field.type == Engine::FieldType::Enum) {
+                                    std::string strVal = JSONUtils::extractStringValue(currentJson, field.name);
+                                    bool parsed = false;
+                                    if (!strVal.empty() && !field.enumOptions.empty()) {
+                                        for (size_t optIdx = 0; optIdx < field.enumOptions.size(); ++optIdx) {
+                                            if (field.enumOptions[optIdx] == strVal) {
+                                                *reinterpret_cast<int*>(fieldPtr) = static_cast<int>(optIdx);
+                                                parsed = true;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    if (!parsed) {
+                                        float fVal = 0.0f;
+                                        if (JSONUtils::extractFloatValue(currentJson, field.name, fVal)) {
+                                            *reinterpret_cast<int*>(fieldPtr) = static_cast<int>(fVal);
+                                        }
+                                    }
+                                } else if (field.type == Engine::FieldType::Int) {
+                                    float fVal = 0.0f;
+                                    if (JSONUtils::extractFloatValue(currentJson, field.name, fVal)) {
+                                        *reinterpret_cast<int*>(fieldPtr) = static_cast<int>(fVal);
+                                    }
+                                } else if (field.type == Engine::FieldType::Bool) {
+                                    float fVal = 0.0f;
+                                    if (JSONUtils::extractFloatValue(currentJson, field.name, fVal)) {
+                                        *reinterpret_cast<bool*>(fieldPtr) = (fVal > 0.5f);
+                                    } else {
+                                        if (currentJson.find("\"" + field.name + "\": true") != std::string::npos ||
+                                            currentJson.find("\"" + field.name + "\":true") != std::string::npos) {
+                                            *reinterpret_cast<bool*>(fieldPtr) = true;
+                                        } else if (currentJson.find("\"" + field.name + "\": false") != std::string::npos ||
+                                                   currentJson.find("\"" + field.name + "\":false") != std::string::npos) {
+                                            *reinterpret_cast<bool*>(fieldPtr) = false;
+                                        }
+                                    }
+                                } else if (field.type == Engine::FieldType::Vec3) {
+                                    float vals[3]{};
+                                    if (JSONUtils::extractFloatArray(currentJson, field.name, vals, 3)) {
+                                        *reinterpret_cast<glm::vec3*>(fieldPtr) = glm::vec3(vals[0], vals[1], vals[2]);
+                                    } else {
+                                        auto* vec = reinterpret_cast<glm::vec3*>(fieldPtr);
+                                        JSONUtils::extractFloatValue(currentJson, field.name + "X", vec->x);
+                                        JSONUtils::extractFloatValue(currentJson, field.name + "Y", vec->y);
+                                        JSONUtils::extractFloatValue(currentJson, field.name + "Z", vec->z);
+                                    }
+                                } else if (field.type == Engine::FieldType::RigidBodyType) {
+                                    std::string typeStr = JSONUtils::extractStringValue(currentJson, field.name);
+                                    if (!typeStr.empty()) {
+                                        *reinterpret_cast<RigidBodyType*>(fieldPtr) = (typeStr == "Static") ? RigidBodyType::Static : RigidBodyType::Dynamic;
+                                    }
+                                } else if (field.type == Engine::FieldType::Entity) {
+                                    float idVal = 0.0f;
+                                    if (JSONUtils::extractFloatValue(currentJson, field.name, idVal)) {
+                                        *reinterpret_cast<Entity*>(fieldPtr) = Entity(static_cast<std::uint32_t>(idVal));
+                                    }
+                                } else if (field.type == Engine::FieldType::String) {
+                                    if (currentJson.find("\"" + field.name + "\":") != std::string::npos) {
+                                        *reinterpret_cast<std::string*>(fieldPtr) = JSONUtils::extractStringValue(currentJson, field.name);
+                                    }
+                                } else if (field.type == Engine::FieldType::Vec2) {
+                                    float vals[2]{};
+                                    if (JSONUtils::extractFloatArray(currentJson, field.name, vals, 2)) {
+                                        *reinterpret_cast<glm::vec2*>(fieldPtr) = glm::vec2(vals[0], vals[1]);
+                                    }
+                                } else if (field.type == Engine::FieldType::Vec4) {
+                                    float vals[4]{};
+                                    if (JSONUtils::extractFloatArray(currentJson, field.name, vals, 4)) {
+                                        *reinterpret_cast<glm::vec4*>(fieldPtr) = glm::vec4(vals[0], vals[1], vals[2], vals[3]);
+                                    }
                                 }
                             }
-                        } else if (field.type == Engine::FieldType::Vec3) {
-                            float vals[3]{};
-                            if (JSONUtils::extractFloatArray(compJson, field.name, vals, 3)) {
-                                *reinterpret_cast<glm::vec3*>(fieldPtr) = glm::vec3(vals[0], vals[1], vals[2]);
-                            } else {
-                                auto* vec = reinterpret_cast<glm::vec3*>(fieldPtr);
-                                JSONUtils::extractFloatValue(compJson, field.name + "X", vec->x);
-                                JSONUtils::extractFloatValue(compJson, field.name + "Y", vec->y);
-                                JSONUtils::extractFloatValue(compJson, field.name + "Z", vec->z);
-                            }
-                        } else if (field.type == Engine::FieldType::RigidBodyType) {
-                            std::string typeStr = JSONUtils::extractStringValue(compJson, field.name);
-                            if (!typeStr.empty()) {
-                                *reinterpret_cast<RigidBodyType*>(fieldPtr) = (typeStr == "Static") ? RigidBodyType::Static : RigidBodyType::Dynamic;
-                            }
-                        } else if (field.type == Engine::FieldType::Entity) {
-                            float idVal = 0.0f;
-                            if (JSONUtils::extractFloatValue(compJson, field.name, idVal)) {
-                                *reinterpret_cast<Entity*>(fieldPtr) = Entity(static_cast<std::uint32_t>(idVal));
-                            }
-                        } else if (field.type == Engine::FieldType::String) {
-                            if (compJson.find("\"" + field.name + "\":") != std::string::npos) {
-                                *reinterpret_cast<std::string*>(fieldPtr) = JSONUtils::extractStringValue(compJson, field.name);
-                            }
-                        } else if (field.type == Engine::FieldType::Vec2) {
-                            float vals[2]{};
-                            if (JSONUtils::extractFloatArray(compJson, field.name, vals, 2)) {
-                                *reinterpret_cast<glm::vec2*>(fieldPtr) = glm::vec2(vals[0], vals[1]);
-                            }
-                        } else if (field.type == Engine::FieldType::Vec4) {
-                            float vals[4]{};
-                            if (JSONUtils::extractFloatArray(compJson, field.name, vals, 4)) {
-                                *reinterpret_cast<glm::vec4*>(fieldPtr) = glm::vec4(vals[0], vals[1], vals[2], vals[3]);
-                            }
-                        }
-                    }
+                        };
+
+                    readReflectedFields(refl.fields, compPtr, compJson);
 
                     if (refl.name == "Inventory") {
                         struct TempItem { std::string id; std::string name; int count; };
@@ -1359,6 +2233,47 @@ void syncReflectionSerializers() {
                                 }
                             }
                         }
+                    }
+
+                    if (refl.name == "Terrain") {
+                        auto* terrain = reinterpret_cast<Engine::TerrainComponent*>(compPtr);
+                        float resX = static_cast<float>(terrain->resolutionX);
+                        float resZ = static_cast<float>(terrain->resolutionZ);
+                        JSONUtils::extractFloatValue(compJson, "resolutionX", resX);
+                        JSONUtils::extractFloatValue(compJson, "resolutionZ", resZ);
+                        terrain->resolutionX = static_cast<uint32_t>(resX);
+                        terrain->resolutionZ = static_cast<uint32_t>(resZ);
+                        JSONUtils::extractFloatValue(compJson, "noiseFrequency", terrain->noiseFrequency);
+                        float octVal = static_cast<float>(terrain->noiseOctaves);
+                        if (JSONUtils::extractFloatValue(compJson, "noiseOctaves", octVal)) terrain->noiseOctaves = static_cast<int>(octVal);
+                        JSONUtils::extractFloatValue(compJson, "noisePersistence", terrain->noisePersistence);
+                        JSONUtils::extractFloatValue(compJson, "noiseLacunarity", terrain->noiseLacunarity);
+                        float seedVal = static_cast<float>(terrain->noiseSeed);
+                        if (JSONUtils::extractFloatValue(compJson, "noiseSeed", seedVal)) terrain->noiseSeed = static_cast<int>(seedVal);
+
+                        size_t heightsPos = compJson.find("\"heights\":");
+                        if (heightsPos == std::string::npos) heightsPos = compJson.find("\"heights\" :");
+                        if (heightsPos != std::string::npos) {
+                            size_t openBracket = compJson.find('[', heightsPos);
+                            size_t closeBracket = compJson.find(']', openBracket);
+                            if (openBracket != std::string::npos && closeBracket != std::string::npos) {
+                                std::string arrayStr = compJson.substr(openBracket + 1, closeBracket - openBracket - 1);
+                                std::stringstream ss(arrayStr);
+                                std::string item;
+                                terrain->heights.clear();
+                                terrain->heights.reserve(terrain->resolutionX * terrain->resolutionZ);
+                                while (std::getline(ss, item, ',')) {
+                                    if (!item.empty()) {
+                                        try {
+                                            terrain->heights.push_back(std::stof(item));
+                                        } catch (...) {}
+                                    }
+                                }
+                            }
+                        }
+                        terrain->ensureAllocated();
+                        terrain->recalculateBounds();
+                        terrain->markFullDirty();
                     }
                 }
             }
@@ -1628,20 +2543,26 @@ bool SceneSerializer::deserialize(const std::string& path, std::vector<Entity>& 
                 void* compPtr = refl.get(registry, entity);
                 if (!compPtr) continue;
 
-                for (const auto& field : refl.fields) {
-                    if (field.type == Engine::FieldType::Entity) {
-                        Entity* refEntity = reinterpret_cast<Entity*>(static_cast<char*>(compPtr) + field.offset);
-                        if (refEntity->getId() != Entity::INVALID_ENTITY) {
-                            auto it = oldToNewEntityMap.find(refEntity->getId());
-                            if (it != oldToNewEntityMap.end()) {
-                                *refEntity = it->second;
-                            } else {
-                                // If the referenced entity wasn't in this scene, reset it to invalid
-                                *refEntity = Entity();
+                std::function<void(const std::vector<Engine::ComponentField>&, void*)> remapEntities =
+                    [&](const std::vector<Engine::ComponentField>& fields, void* parentPtr) {
+                        for (const auto& field : fields) {
+                            char* fieldPtr = static_cast<char*>(parentPtr) + field.offset;
+                            if (field.type == Engine::FieldType::Struct) {
+                                remapEntities(field.subFields, fieldPtr);
+                            } else if (field.type == Engine::FieldType::Entity) {
+                                Entity* refEntity = reinterpret_cast<Entity*>(fieldPtr);
+                                if (refEntity->getId() != Entity::INVALID_ENTITY) {
+                                    auto it = oldToNewEntityMap.find(refEntity->getId());
+                                    if (it != oldToNewEntityMap.end()) {
+                                        *refEntity = it->second;
+                                    } else {
+                                        *refEntity = Entity();
+                                    }
+                                }
                             }
                         }
-                    }
-                }
+                    };
+                remapEntities(refl.fields, compPtr);
             }
         }
     }

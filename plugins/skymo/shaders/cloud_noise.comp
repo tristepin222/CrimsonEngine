@@ -1,0 +1,100 @@
+#version 450
+
+layout(local_size_x = 4, local_size_y = 4, local_size_z = 4) in;
+
+layout(set = 0, binding = 0, rgba8) uniform writeonly image3D outNoiseTex;
+
+// Periodic 3D hash producing pseudorandom point in [0, 1]^3 for a given cell coordinate
+vec3 hash33(vec3 p) {
+    p = fract(p * vec3(0.1031, 0.1030, 0.0973));
+    p += dot(p, p.yxz + 33.33);
+    return fract((p.xxy + p.yxx) * p.zyx);
+}
+
+// Periodic gradient vector for 3D Perlin noise
+vec3 grad3(vec3 p) {
+    vec3 h = hash33(p) * 2.0 - 1.0;
+    return normalize(h);
+}
+
+// Seamless periodic Worley (cellular) noise with period M
+float periodicWorley(vec3 p, float M) {
+    vec3 i = floor(p);
+    vec3 f = fract(p);
+    float minDist = 1.0;
+
+    for (int z = -1; z <= 1; ++z) {
+        for (int y = -1; y <= 1; ++y) {
+            for (int x = -1; x <= 1; ++x) {
+                vec3 neighbor = vec3(float(x), float(y), float(z));
+                vec3 cell = mod(i + neighbor + M * 10.0, M);
+                vec3 featurePoint = neighbor + hash33(cell);
+                float dist = length(featurePoint - f);
+                minDist = min(minDist, dist);
+            }
+        }
+    }
+    return clamp(minDist, 0.0, 1.0);
+}
+
+// Seamless periodic Perlin gradient noise with period M
+float periodicPerlin(vec3 p, float M) {
+    vec3 i = floor(p);
+    vec3 f = fract(p);
+
+    // Quintic Hermite interpolation curve
+    vec3 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+
+    // 8 cell corners with periodic wrap
+    float n000 = dot(grad3(mod(i + vec3(0, 0, 0) + M * 10.0, M)), f - vec3(0, 0, 0));
+    float n100 = dot(grad3(mod(i + vec3(1, 0, 0) + M * 10.0, M)), f - vec3(1, 0, 0));
+    float n010 = dot(grad3(mod(i + vec3(0, 1, 0) + M * 10.0, M)), f - vec3(0, 1, 0));
+    float n110 = dot(grad3(mod(i + vec3(1, 1, 0) + M * 10.0, M)), f - vec3(1, 1, 0));
+    float n001 = dot(grad3(mod(i + vec3(0, 0, 1) + M * 10.0, M)), f - vec3(0, 0, 1));
+    float n101 = dot(grad3(mod(i + vec3(1, 0, 1) + M * 10.0, M)), f - vec3(1, 0, 1));
+    float n011 = dot(grad3(mod(i + vec3(0, 1, 1) + M * 10.0, M)), f - vec3(0, 1, 1));
+    float n111 = dot(grad3(mod(i + vec3(1, 1, 1) + M * 10.0, M)), f - vec3(1, 1, 1));
+
+    float nx00 = mix(n000, n100, u.x);
+    float nx10 = mix(n010, n110, u.x);
+    float nx01 = mix(n001, n101, u.x);
+    float nx11 = mix(n011, n111, u.x);
+
+    float nxy0 = mix(nx00, nx10, u.y);
+    float nxy1 = mix(nx01, nx11, u.y);
+
+    return mix(nxy0, nxy1, u.z) * 0.5 + 0.5; // Map from [-1, 1] to [0, 1]
+}
+
+void main() {
+    ivec3 coord = ivec3(gl_GlobalInvocationID.xyz);
+    ivec3 size = imageSize(outNoiseTex);
+    if (any(greaterThanEqual(coord, size))) return;
+
+    vec3 uvw = vec3(coord) / vec3(size);
+
+    // Channel R: Multi-octave Fractal Perlin-Worley noise (periods 4, 8, 16)
+    float perlinFBM = periodicPerlin(uvw * 4.0, 4.0) * 0.533
+                    + periodicPerlin(uvw * 8.0, 8.0) * 0.267
+                    + periodicPerlin(uvw * 16.0, 16.0) * 0.200;
+
+    // Multi-octave Inverted Worley cellular noise (periods 4, 8, 16)
+    float worley1 = 1.0 - periodicWorley(uvw * 4.0, 4.0);
+    float worley2 = 1.0 - periodicWorley(uvw * 8.0, 8.0);
+    float worley3 = 1.0 - periodicWorley(uvw * 16.0, 16.0);
+    float worleyFBM = worley1 * 0.60 + worley2 * 0.30 + worley3 * 0.10;
+
+    // Horizon Zero Dawn Perlin-Worley remap: Worley cellular billows carve into Perlin FBM
+    float perlinWorley = clamp((perlinFBM - (1.0 - worleyFBM) * 0.45) / max(0.001, 1.0 - (1.0 - worleyFBM) * 0.45), 0.0, 1.0);
+
+    // Channel G: Inverted Worley octave 1 (medium cauliflower cells, period 4)
+    float worleyG = worley1;
+
+    // Channel B: Inverted Worley octave 2 (fine cauliflower cells, period 8)
+    float worleyB = worley2;
+
+    // Channel A: Inverted Worley octave 3 (wispy edge details, period 16)
+    float worleyA = worley3;
+
+    imageStore(outNoiseTex, coord, vec4(perlinWorley, worleyG, worleyB, worleyA));
+}

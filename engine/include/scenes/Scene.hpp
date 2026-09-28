@@ -52,6 +52,16 @@ public:
      * @return True if load was successful.
      */
     virtual bool loadFromFile(const std::string& path);
+
+    /**
+     * @brief Gets the file path of this scene.
+     */
+    const std::string& getPath() const { return currentPath; }
+
+    /**
+     * @brief Sets the file path of this scene.
+     */
+    void setPath(const std::string& path) { currentPath = path; }
     /**
      * @brief Helper to spawn primitive geometric entities.
      * @param primitiveType Kind of primitive (Triangle, Cube, Quad).
@@ -117,6 +127,8 @@ protected:
     Registry& registry;
     /** @brief Reference to Vulkan renderer. */
     VulkanRenderer& renderer;
+    /** @brief Current file path of the loaded scene. */
+    std::string currentPath;
 
 private:
     /** @brief List of entities owned by this scene. */

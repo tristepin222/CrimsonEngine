@@ -127,11 +127,8 @@ void PluginManager::unloadPlugins() {
             context.imguiContext  = ImGui::GetCurrentContext();
             plugin.shutdownFunc(&context);
         }
-#ifdef _WIN32
-        FreeLibrary(plugin.handle);
-#else
-        dlclose(plugin.handle);
-#endif
+        // Note: FreeLibrary during process exit is intentionally omitted when Tracy Profiler is active
+        // to prevent accessing unloaded DLL source location memory addresses during static destruction.
     }
     loadedPlugins.clear();
     std::cout << "[PluginManager] All plugins unloaded." << std::endl;

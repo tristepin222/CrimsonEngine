@@ -24,7 +24,7 @@ enum class CinemachineMode {
  * @brief Addon component that represents a virtual camera.
  *        Managed by CinemachineSystem to calculate tracking offsets, damping, and priority-blending.
  */
-// [ReflectClass]
+// [ReflectClass("Camera/Cinemachine Virtual Camera")]
 struct CinemachineVirtualCamera {
     /** @brief Target entity handle to follow. */
     Entity followTarget = Entity();
@@ -98,6 +98,3 @@ struct CinemachineVirtualCamera {
     /** @brief Flag indicating whether camera initial transform was initialized. */
     bool initialized = false;
 };
-
-#include "meta/ComponentReflection.hpp"
-REGISTER_COMPONENT(CinemachineVirtualCamera, "Camera/Cinemachine Virtual Camera");

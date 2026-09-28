@@ -80,7 +80,7 @@ public:
     void clear() {
         auto aliveCopy = entities.getAlive();
         for (auto id : aliveCopy) {
-            destroy(Entity(id));
+            destroy(entities.getEntity(id));
         }
         for (auto& s : storages) {
             s.reset();
@@ -98,9 +98,101 @@ public:
     }
 
     /**
+     * @brief Retrieves the active Entity handle for a given ID.
+     * @param id Entity ID.
+     * @return Entity handle with matching generation.
+     */
+    Entity getEntity(uint32_t id) const {
+        return entities.getEntity(id);
+    }
+
+    /**
+     * @brief Sets the active state of an entity.
+     * @param e Target entity.
+     * @param active Whether the entity is active.
+     */
+    void setActive(Entity e, bool active) {
+        entities.setActive(e, active);
+    }
+
+    /**
+     * @brief Checks if an entity is active.
+     * @param e Target entity.
+     * @return True if entity is active and valid.
+     */
+    bool isActive(Entity e) const {
+        return entities.isActive(e);
+    }
+
+    /**
+     * @brief Helper to get compile-time static cached component type ID.
+     */
+    template<typename T>
+    static std::size_t getComponentTypeId() {
+        static const std::size_t id = registerComponentType(typeid(T));
+        return id;
+    }
+
+    /**
+     * @brief Enables or disables a component on an entity by toggling its mask bit.
+     * When disabled, the component remains in storage but is hidden from views.
+     * @tparam T Component type.
+     * @param e Target entity.
+     * @param enabled Active state flag.
+     */
+    template<typename T>
+    void setComponentEnabled(Entity e, bool enabled) {
+        if (!has<T>(e)) return;
+        std::size_t id = getComponentTypeId<T>();
+        if (id < MAX_COMPONENTS && entities.isValid(e)) {
+            entities.getMask(e).set(id, enabled);
+        }
+    }
+
+    /**
+     * @brief Checks if a component is enabled on an entity.
+     * @tparam T Component type.
+     * @param e Target entity.
+     * @return True if entity has the component and its mask bit is set.
+     */
+    template<typename T>
+    bool isComponentEnabled(Entity e) const {
+        if (!has<T>(e)) return false;
+        std::size_t id = getComponentTypeId<T>();
+        if (id >= MAX_COMPONENTS || !entities.isValid(e)) return false;
+        return entities.getMask(e).test(id);
+    }
+
+    /**
+     * @brief Dynamic overload to enable or disable a component by runtime ID.
+     */
+    void setComponentEnabled(Entity e, std::size_t componentId, bool enabled) {
+        if (componentId < MAX_COMPONENTS && entities.isValid(e)) {
+            entities.getMask(e).set(componentId, enabled);
+        }
+    }
+
+    /**
+     * @brief Dynamic overload to check if a component is enabled by runtime ID.
+     */
+    bool isComponentEnabled(Entity e, std::size_t componentId) const {
+        if (componentId < MAX_COMPONENTS && entities.isValid(e)) {
+            return entities.getMask(e).test(componentId);
+        }
+        return false;
+    }
+
+    /**
      * @brief Exposes the component mask for a given entity.
      */
     ComponentMask& getMask(Entity e) {
+        return entities.getMask(e);
+    }
+
+    /**
+     * @brief Exposes the const component mask for a given entity.
+     */
+    const ComponentMask& getMask(Entity e) const {
         return entities.getMask(e);
     }
 
@@ -252,7 +344,7 @@ public:
             void advance() {
                 while (index < entities.size()) {
                     Entity e = entities[index];
-                    if (e.getId() != Entity::INVALID_ENTITY && registry.isValid(e)) {
+                    if (e.getId() != Entity::INVALID_ENTITY && registry.isValid(e) && registry.isActive(e)) {
                         if ((registry.getMask(e) & mask) == mask) {
                             break;
                         }
@@ -325,14 +417,6 @@ private:
     /** @brief Callbacks for component removals. */
     std::unordered_map<std::size_t, std::vector<ComponentRemovedCallback>> componentRemovedCallbacks;
 
-    /**
-     * @brief Helper to get compile-time static cached component type ID.
-     */
-    template<typename T>
-    static std::size_t getComponentTypeId() {
-        static const std::size_t id = registerComponentType(typeid(T));
-        return id;
-    }
 
     /**
      * @brief Ensures a component storage exists.

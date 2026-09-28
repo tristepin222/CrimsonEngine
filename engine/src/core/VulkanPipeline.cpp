@@ -82,7 +82,10 @@ void VulkanPipeline::create(VkDevice dev,
     VkRenderPass renderPass,
     const std::string& vertPath,
     const std::string& fragPath,
-    const std::vector<VkDescriptorSetLayout>& descriptorSetLayouts) {
+    const std::vector<VkDescriptorSetLayout>& descriptorSetLayouts,
+    const std::vector<VkVertexInputBindingDescription>& customBindings,
+    const std::vector<VkVertexInputAttributeDescription>& customAttributes,
+    VkCullModeFlags cullMode) {
     device = dev;
 
     // Load shaders
@@ -106,54 +109,24 @@ void VulkanPipeline::create(VkDevice dev,
 
     VkPipelineShaderStageCreateInfo shaderStages[] = { vertStage, fragStage };
 
-    // --- Vertex Input (you can extend for your own Vertex type)
-// Binding description
-    VkVertexInputBindingDescription bindings[2]{};
-
-    // Per-vertex
-    bindings[0].binding = 0;
-    bindings[0].stride = sizeof(Vertex);
-    bindings[0].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
-
-    // Per-instance
-    bindings[1].binding = 1;
-    bindings[1].stride = sizeof(InstanceDataGPU);
-    bindings[1].inputRate = VK_VERTEX_INPUT_RATE_INSTANCE;
-
-    // Attributes
-    VkVertexInputAttributeDescription attributes[6]{};
-
-    // Vertex pos (location 0)
-    attributes[0].binding = 0;
-    attributes[0].location = 0;
-    attributes[0].format = VK_FORMAT_R32G32B32_SFLOAT;
-    attributes[0].offset = offsetof(Vertex, position);
-
-    // Instance model matrix (locations 1..4)
-    for (int i = 0; i < 4; i++) {
-        attributes[1 + i].binding = 1;
-        attributes[1 + i].location = 1 + i;
-        attributes[1 + i].format = VK_FORMAT_R32G32B32A32_SFLOAT;
-        attributes[1 + i].offset = sizeof(glm::vec4) * i;
-    }
-
-    // Instance color (location 5)
-    attributes[5].binding = 1;
-    attributes[5].location = 5;
-    attributes[5].format = VK_FORMAT_R32G32B32A32_SFLOAT;
-    attributes[5].offset = sizeof(glm::mat4);
-
-    // Vertex binding and attributes from Vertex structure
-    auto bindingDescription = Vertex::getBindingDescription();
-    auto attributeDescriptions = Vertex::getAttributeDescriptions();
-
     // Vertex input info
     VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
     vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-    vertexInputInfo.vertexBindingDescriptionCount = 1;
-    vertexInputInfo.pVertexBindingDescriptions = &bindingDescription;
-    vertexInputInfo.vertexAttributeDescriptionCount = static_cast<uint32_t>(attributeDescriptions.size());
-    vertexInputInfo.pVertexAttributeDescriptions = attributeDescriptions.data();
+
+    auto defaultBindingDescription = Vertex::getBindingDescription();
+    auto defaultAttributeDescriptions = Vertex::getAttributeDescriptions();
+
+    if (!customBindings.empty()) {
+        vertexInputInfo.vertexBindingDescriptionCount = static_cast<uint32_t>(customBindings.size());
+        vertexInputInfo.pVertexBindingDescriptions = customBindings.data();
+        vertexInputInfo.vertexAttributeDescriptionCount = static_cast<uint32_t>(customAttributes.size());
+        vertexInputInfo.pVertexAttributeDescriptions = customAttributes.data();
+    } else {
+        vertexInputInfo.vertexBindingDescriptionCount = 1;
+        vertexInputInfo.pVertexBindingDescriptions = &defaultBindingDescription;
+        vertexInputInfo.vertexAttributeDescriptionCount = static_cast<uint32_t>(defaultAttributeDescriptions.size());
+        vertexInputInfo.pVertexAttributeDescriptions = defaultAttributeDescriptions.data();
+    }
 
     // --- Input Assembly
     VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
@@ -176,7 +149,7 @@ void VulkanPipeline::create(VkDevice dev,
     rasterizer.rasterizerDiscardEnable = VK_FALSE;
     rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
     rasterizer.lineWidth = 1.0f;
-    rasterizer.cullMode = VK_CULL_MODE_NONE;
+    rasterizer.cullMode = cullMode;
     rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
     rasterizer.depthBiasEnable = VK_FALSE;
 

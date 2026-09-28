@@ -7,6 +7,9 @@
 #include "ecs/components/UIComponents.hpp"
 #include "ecs/components/PrefabComponent.hpp"
 #include "ecs/components/SpriteRenderer.hpp"
+#include "ecs/components/LightComponent.hpp"
+#include "ecs/components/TerrainComponent.hpp"
+#include "ecs/components/GridWorldComponent.hpp"
 #include "renderer/VulkanRenderer.hpp"
 #include <algorithm>
 #include <filesystem>
@@ -34,8 +37,8 @@ Scene::~Scene() {
 void Scene::unload() {
     std::vector<Entity> toDestroy;
     for (uint32_t id : registry.getAlive()) {
-        Entity e(id);
-        if (!registry.has<EditorCamera>(e)) {
+        Entity e = registry.getEntity(id);
+        if (registry.isValid(e) && !registry.has<EditorCamera>(e)) {
             toDestroy.push_back(e);
         }
     }
@@ -51,6 +54,12 @@ void Scene::unload() {
  * @return True if successful, false otherwise.
  */
 bool Scene::saveToFile(const std::string& path) {
+    std::string actualPath = path.empty() ? currentPath : path;
+    if (actualPath.empty()) {
+        actualPath = "assets/scenes/test_scene.json";
+    }
+    currentPath = actualPath;
+
     // 1. Purge invalid or EditorCamera entities from ownedEntities
     ownedEntities.erase(
         std::remove_if(ownedEntities.begin(), ownedEntities.end(),
@@ -81,7 +90,7 @@ bool Scene::saveToFile(const std::string& path) {
     }
 
     SceneSerializer serializer(registry, renderer);
-    return serializer.serialize(path, entitiesToSerialize);
+    return serializer.serialize(actualPath, entitiesToSerialize);
 }
 
 /**
@@ -90,6 +99,7 @@ bool Scene::saveToFile(const std::string& path) {
  * @return True if successful, false otherwise.
  */
 bool Scene::loadFromFile(const std::string& path) {
+    currentPath = path;
     SceneSerializer serializer(registry, renderer);
     unload();
     
@@ -162,6 +172,16 @@ Entity Scene::createEntityOfType(const std::string& entityType) {
             1.0f,
             100.0f
         );
+    } else if (entityType == "Directional Light") {
+        entity = registry.create();
+        registry.emplace<Name>(entity, Name{ makeUniqueEntityName("Directional Light") });
+        registry.emplace<Transform>(entity, Transform{ glm::vec3(0.0f, 10.0f, 0.0f), glm::vec3(-45.0f, -30.0f, 0.0f) });
+        registry.emplace<Engine::LightComponent>(entity, Engine::LightComponent{ Engine::LightType::Directional, glm::vec3(1.0f, 1.0f, 1.0f), 1.0f, 10.0f });
+    } else if (entityType == "Point Light") {
+        entity = registry.create();
+        registry.emplace<Name>(entity, Name{ makeUniqueEntityName("Point Light") });
+        registry.emplace<Transform>(entity, Transform{ glm::vec3(0.0f, 2.0f, 0.0f) });
+        registry.emplace<Engine::LightComponent>(entity, Engine::LightComponent{ Engine::LightType::Point, glm::vec3(1.0f, 1.0f, 1.0f), 1.0f, 20.0f });
     } else if (entityType == "Empty") {
         entity = registry.create();
         registry.emplace<Name>(entity, Name{ makeUniqueEntityName("Empty GameObject") });
@@ -171,6 +191,16 @@ Entity Scene::createEntityOfType(const std::string& entityType) {
         registry.emplace<Name>(entity, Name{ makeUniqueEntityName("Sprite Renderer") });
         registry.emplace<Transform>(entity, Transform{ glm::vec3(0.0f) });
         registry.emplace<Engine::SpriteRenderer>(entity, Engine::SpriteRenderer{});
+    } else if (entityType == "Terrain") {
+        entity = registry.create();
+        registry.emplace<Name>(entity, Name{ makeUniqueEntityName("Terrain") });
+        registry.emplace<Transform>(entity, Transform{ glm::vec3(0.0f) });
+        registry.emplace<Engine::TerrainComponent>(entity, Engine::TerrainComponent{});
+    } else if (entityType == "Grid World") {
+        entity = registry.create();
+        registry.emplace<Name>(entity, Name{ makeUniqueEntityName("Grid World") });
+        registry.emplace<Transform>(entity, Transform{ glm::vec3(0.0f) });
+        registry.emplace<Engine::GridWorldComponent>(entity, Engine::GridWorldComponent{});
     } else if (entityType == "Canvas") {
         entity = registry.create();
         registry.emplace<Name>(entity, Name{ makeUniqueEntityName("Canvas") });

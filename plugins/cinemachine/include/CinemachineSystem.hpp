@@ -14,6 +14,7 @@ public:
 
 private:
     Registry& registry;
+    class VulkanRenderer& renderer;
     EditorModeState& editorMode;
 
     // Blending state

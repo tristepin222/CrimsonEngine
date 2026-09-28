@@ -273,22 +273,44 @@ void EditorUI::initialize(GLFWwindow* window) {
     IMGUI_CHECKVERSION();
     CreateContext();
 
-    // --- Setup Custom Engine Theme (Modern Slate & Cyan Dark Theme) ---
+    // Prefer a readable UI face when launched from the repository, SDK root,
+    // or a packaged sandbox project.
+    ImGuiIO& io = ImGui::GetIO();
+    const char* fontCandidates[] = {
+        "third_party/imgui/misc/fonts/Roboto-Medium.ttf",
+        "../third_party/imgui/misc/fonts/Roboto-Medium.ttf",
+        "../../third_party/imgui/misc/fonts/Roboto-Medium.ttf"
+    };
+    for (const char* fontPath : fontCandidates) {
+        if (std::filesystem::exists(fontPath)) {
+            ImFontConfig fontConfig{};
+            fontConfig.OversampleH = 2;
+            fontConfig.OversampleV = 2;
+            io.Fonts->AddFontFromFileTTF(fontPath, 15.0f, &fontConfig);
+            break;
+        }
+    }
+
+    // --- Editor UI metrics ---
+    // Keep the existing palette, but give the editor a calmer rhythm and clearer
+    // separation between chrome, controls, and content.
     ImGuiStyle& style = ImGui::GetStyle();
-    style.WindowRounding = 6.0f;
-    style.ChildRounding = 5.0f;
-    style.FrameRounding = 5.0f;
-    style.PopupRounding = 6.0f;
-    style.ScrollbarRounding = 9.0f;
-    style.GrabRounding = 4.0f;
-    style.TabRounding = 5.0f;
+    style.WindowRounding = 4.0f;
+    style.ChildRounding = 3.0f;
+    style.FrameRounding = 3.0f;
+    style.PopupRounding = 4.0f;
+    style.ScrollbarRounding = 4.0f;
+    style.GrabRounding = 3.0f;
+    style.TabRounding = 3.0f;
     style.WindowBorderSize = 1.0f;
     style.FrameBorderSize = 0.0f;
     style.PopupBorderSize = 1.0f;
-    style.ItemSpacing = ImVec2(8.0f, 6.0f);
-    style.ItemInnerSpacing = ImVec2(6.0f, 6.0f);
-    style.WindowPadding = ImVec2(10.0f, 10.0f);
+    style.ItemSpacing = ImVec2(7.0f, 5.0f);
+    style.ItemInnerSpacing = ImVec2(5.0f, 5.0f);
+    style.WindowPadding = ImVec2(10.0f, 9.0f);
     style.FramePadding = ImVec2(8.0f, 5.0f);
+    style.CellPadding = ImVec2(7.0f, 4.0f);
+    style.IndentSpacing = 16.0f;
     
     // Color Palette
     ImVec4* colors = style.Colors;
@@ -346,6 +368,10 @@ void EditorUI::initialize(GLFWwindow* window) {
     colors[ImGuiCol_NavWindowingDimBg]      = ImVec4(0.80f, 0.80f, 0.80f, 0.20f);
     colors[ImGuiCol_ModalWindowDimBg]       = ImVec4(0.80f, 0.80f, 0.80f, 0.35f);
 
+    loadUserSettings();
+    applyUserTheme();
+    saveUserSettings();
+
     createDescriptorPool();
 
     if (!ImGui_ImplGlfw_InitForVulkan(window, true)) {
@@ -365,7 +391,7 @@ void EditorUI::initialize(GLFWwindow* window) {
     initInfo.ImageCount = 2;
     initInfo.Allocator = nullptr;
     initInfo.CheckVkResultFn = nullptr;
-    initInfo.PipelineInfoMain.RenderPass = renderer.getRenderPass();
+    initInfo.PipelineInfoMain.RenderPass = renderer.getSwapchainRenderPass();
     initInfo.PipelineInfoMain.Subpass = 0;
     initInfo.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
 
@@ -395,6 +421,128 @@ void EditorUI::initialize(GLFWwindow* window) {
 
     applyInputMode();
     initialized = true;
+}
+
+void EditorUI::applyUserTheme() {
+    ImGuiStyle& style = ImGui::GetStyle();
+    if (userTheme == 2) {
+        ImGui::StyleColorsLight(&style);
+    } else {
+        ImGui::StyleColorsDark(&style);
+    }
+
+    style.WindowRounding = 3.0f;
+    style.ChildRounding = 2.0f;
+    style.FrameRounding = 3.0f;
+    style.PopupRounding = 3.0f;
+    style.ScrollbarRounding = 3.0f;
+    style.GrabRounding = 3.0f;
+    style.TabRounding = 3.0f;
+    style.WindowBorderSize = 1.0f;
+    style.FrameBorderSize = 0.0f;
+    style.PopupBorderSize = 1.0f;
+    style.ItemSpacing = ImVec2(7.0f, 5.0f);
+    style.ItemInnerSpacing = ImVec2(5.0f, 5.0f);
+    style.WindowPadding = ImVec2(10.0f, 9.0f);
+    style.FramePadding = ImVec2(8.0f, 5.0f);
+    style.CellPadding = ImVec2(7.0f, 4.0f);
+    style.IndentSpacing = 16.0f;
+
+    ImVec4* c = style.Colors;
+    if (userTheme == 1) {
+        c[ImGuiCol_Text] = ImVec4(0.96f, 0.93f, 0.93f, 1.0f);
+        c[ImGuiCol_TextDisabled] = ImVec4(0.62f, 0.52f, 0.54f, 1.0f);
+        c[ImGuiCol_WindowBg] = ImVec4(0.105f, 0.075f, 0.082f, 1.0f);
+        c[ImGuiCol_ChildBg] = ImVec4(0.13f, 0.09f, 0.10f, 1.0f);
+        c[ImGuiCol_PopupBg] = ImVec4(0.15f, 0.10f, 0.11f, 1.0f);
+        c[ImGuiCol_Border] = ImVec4(0.34f, 0.18f, 0.21f, 1.0f);
+        c[ImGuiCol_FrameBg] = ImVec4(0.19f, 0.13f, 0.15f, 1.0f);
+        c[ImGuiCol_FrameBgHovered] = ImVec4(0.29f, 0.17f, 0.20f, 1.0f);
+        c[ImGuiCol_FrameBgActive] = ImVec4(0.36f, 0.18f, 0.22f, 1.0f);
+        c[ImGuiCol_MenuBarBg] = ImVec4(0.08f, 0.055f, 0.06f, 1.0f);
+        c[ImGuiCol_Header] = ImVec4(0.31f, 0.13f, 0.17f, 1.0f);
+        c[ImGuiCol_HeaderHovered] = ImVec4(0.47f, 0.18f, 0.23f, 1.0f);
+        c[ImGuiCol_HeaderActive] = ImVec4(0.58f, 0.20f, 0.25f, 1.0f);
+        c[ImGuiCol_Button] = ImVec4(0.31f, 0.13f, 0.17f, 1.0f);
+        c[ImGuiCol_ButtonHovered] = ImVec4(0.52f, 0.19f, 0.25f, 1.0f);
+        c[ImGuiCol_ButtonActive] = ImVec4(0.66f, 0.22f, 0.28f, 1.0f);
+        c[ImGuiCol_CheckMark] = ImVec4(0.95f, 0.34f, 0.39f, 1.0f);
+        c[ImGuiCol_SliderGrab] = ImVec4(0.95f, 0.34f, 0.39f, 1.0f);
+        c[ImGuiCol_Separator] = ImVec4(0.34f, 0.18f, 0.21f, 1.0f);
+        c[ImGuiCol_SeparatorHovered] = ImVec4(0.75f, 0.25f, 0.31f, 1.0f);
+        c[ImGuiCol_Tab] = ImVec4(0.14f, 0.09f, 0.10f, 1.0f);
+        c[ImGuiCol_TabHovered] = ImVec4(0.43f, 0.17f, 0.22f, 1.0f);
+        c[ImGuiCol_TabActive] = ImVec4(0.31f, 0.13f, 0.17f, 1.0f);
+    } else if (userTheme == 2) {
+        c[ImGuiCol_Text] = ImVec4(0.12f, 0.14f, 0.18f, 1.0f);
+        c[ImGuiCol_TextDisabled] = ImVec4(0.40f, 0.44f, 0.51f, 1.0f);
+        c[ImGuiCol_WindowBg] = ImVec4(0.91f, 0.92f, 0.94f, 1.0f);
+        c[ImGuiCol_ChildBg] = ImVec4(0.96f, 0.97f, 0.98f, 1.0f);
+        c[ImGuiCol_PopupBg] = ImVec4(0.99f, 0.99f, 1.0f, 1.0f);
+        c[ImGuiCol_Border] = ImVec4(0.70f, 0.74f, 0.80f, 1.0f);
+        c[ImGuiCol_FrameBg] = ImVec4(0.83f, 0.86f, 0.90f, 1.0f);
+        c[ImGuiCol_FrameBgHovered] = ImVec4(0.72f, 0.81f, 0.91f, 1.0f);
+        c[ImGuiCol_FrameBgActive] = ImVec4(0.60f, 0.74f, 0.89f, 1.0f);
+        c[ImGuiCol_MenuBarBg] = ImVec4(0.83f, 0.85f, 0.89f, 1.0f);
+        c[ImGuiCol_Header] = ImVec4(0.72f, 0.81f, 0.91f, 1.0f);
+        c[ImGuiCol_HeaderHovered] = ImVec4(0.58f, 0.73f, 0.89f, 1.0f);
+        c[ImGuiCol_HeaderActive] = ImVec4(0.48f, 0.65f, 0.84f, 1.0f);
+        c[ImGuiCol_Button] = ImVec4(0.72f, 0.78f, 0.86f, 1.0f);
+        c[ImGuiCol_ButtonHovered] = ImVec4(0.50f, 0.69f, 0.88f, 1.0f);
+        c[ImGuiCol_ButtonActive] = ImVec4(0.38f, 0.59f, 0.80f, 1.0f);
+        c[ImGuiCol_CheckMark] = ImVec4(0.16f, 0.42f, 0.72f, 1.0f);
+        c[ImGuiCol_SliderGrab] = ImVec4(0.16f, 0.42f, 0.72f, 1.0f);
+        c[ImGuiCol_Separator] = ImVec4(0.70f, 0.74f, 0.80f, 1.0f);
+        c[ImGuiCol_SeparatorHovered] = ImVec4(0.30f, 0.56f, 0.83f, 1.0f);
+        c[ImGuiCol_Tab] = ImVec4(0.82f, 0.85f, 0.89f, 1.0f);
+        c[ImGuiCol_TabHovered] = ImVec4(0.62f, 0.75f, 0.89f, 1.0f);
+        c[ImGuiCol_TabActive] = ImVec4(0.54f, 0.69f, 0.86f, 1.0f);
+    } else {
+        c[ImGuiCol_Text] = ImVec4(0.92f, 0.93f, 0.95f, 1.0f);
+        c[ImGuiCol_TextDisabled] = ImVec4(0.48f, 0.52f, 0.58f, 1.0f);
+        c[ImGuiCol_WindowBg] = ImVec4(0.09f, 0.10f, 0.13f, 1.0f);
+        c[ImGuiCol_ChildBg] = ImVec4(0.11f, 0.12f, 0.15f, 1.0f);
+        c[ImGuiCol_PopupBg] = ImVec4(0.12f, 0.13f, 0.17f, 1.0f);
+        c[ImGuiCol_Border] = ImVec4(0.20f, 0.22f, 0.28f, 1.0f);
+        c[ImGuiCol_FrameBg] = ImVec4(0.15f, 0.17f, 0.22f, 1.0f);
+        c[ImGuiCol_FrameBgHovered] = ImVec4(0.22f, 0.25f, 0.32f, 1.0f);
+        c[ImGuiCol_FrameBgActive] = ImVec4(0.18f, 0.20f, 0.26f, 1.0f);
+        c[ImGuiCol_MenuBarBg] = ImVec4(0.08f, 0.09f, 0.12f, 1.0f);
+        c[ImGuiCol_Header] = ImVec4(0.16f, 0.19f, 0.25f, 1.0f);
+        c[ImGuiCol_HeaderHovered] = ImVec4(0.22f, 0.28f, 0.38f, 1.0f);
+        c[ImGuiCol_HeaderActive] = ImVec4(0.18f, 0.22f, 0.30f, 1.0f);
+        c[ImGuiCol_Button] = ImVec4(0.18f, 0.20f, 0.26f, 1.0f);
+        c[ImGuiCol_ButtonHovered] = ImVec4(0.25f, 0.55f, 0.85f, 1.0f);
+        c[ImGuiCol_ButtonActive] = ImVec4(0.15f, 0.42f, 0.72f, 1.0f);
+        c[ImGuiCol_CheckMark] = ImVec4(0.22f, 0.58f, 0.95f, 1.0f);
+        c[ImGuiCol_SliderGrab] = ImVec4(0.22f, 0.58f, 0.95f, 1.0f);
+        c[ImGuiCol_Separator] = ImVec4(0.20f, 0.22f, 0.28f, 1.0f);
+        c[ImGuiCol_SeparatorHovered] = ImVec4(0.25f, 0.55f, 0.85f, 1.0f);
+        c[ImGuiCol_Tab] = ImVec4(0.12f, 0.14f, 0.18f, 1.0f);
+        c[ImGuiCol_TabHovered] = ImVec4(0.22f, 0.26f, 0.34f, 1.0f);
+        c[ImGuiCol_TabActive] = ImVec4(0.18f, 0.22f, 0.28f, 1.0f);
+    }
+}
+
+void EditorUI::loadUserSettings() {
+    std::ifstream input("editor.user.settings");
+    std::string line;
+    while (std::getline(input, line)) {
+        if (line.rfind("theme=", 0) == 0) {
+            try {
+                userTheme = std::clamp(std::stoi(line.substr(6)), 0, 2);
+            } catch (const std::exception&) {
+                userTheme = 0;
+            }
+        }
+    }
+}
+
+void EditorUI::saveUserSettings() const {
+    std::ofstream output("editor.user.settings", std::ios::trunc);
+    if (output.is_open()) {
+        output << "theme=" << userTheme << '\n';
+    }
 }
 
 void EditorUI::shutdown() {

@@ -17,7 +17,7 @@ PLUGIN_API void registerScriptReflection() {
     {
         Engine::ComponentReflection refl;
         refl.name = "CinemachineVirtualCamera";
-        refl.category = "General";
+        refl.category = "Camera";
         refl.displayName = "Cinemachine Virtual Camera";
         refl.fields = {
             { "followTargetName", Engine::FieldType::String, offsetof(CinemachineVirtualCamera, followTargetName) },
@@ -42,6 +42,8 @@ PLUGIN_API void registerScriptReflection() {
         refl.has = [](Registry& reg, Entity e) { return reg.has<CinemachineVirtualCamera>(e); };
         refl.remove = [](Registry& reg, Entity e) { reg.remove<CinemachineVirtualCamera>(e); };
         refl.get = [](Registry& reg, Entity e) { return static_cast<void*>(reg.get<CinemachineVirtualCamera>(e)); };
+        refl.isEnabled = [](const Registry& reg, Entity e) { return reg.isComponentEnabled<CinemachineVirtualCamera>(e); };
+        refl.setEnabled = [](Registry& reg, Entity e, bool enabled) { reg.setComponentEnabled<CinemachineVirtualCamera>(e, enabled); };
         Engine::ComponentReflectionRegistry::getInstance().registerComponent(refl);
     }
 }

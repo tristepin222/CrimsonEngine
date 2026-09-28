@@ -21,6 +21,7 @@ public:
     EntityManager() {
         generations.fill(0);
         aliveMask.reset();
+        activeMask.reset();
         for (Entity::IdType i = 0; i < MAX_ENTITIES; ++i)
             freeIds.push(i);
     }
@@ -44,6 +45,7 @@ public:
         Entity::IdType id = freeIds.top();
         freeIds.pop();
         aliveMask.set(id);
+        activeMask.set(id, true);
         alive.push_back(id);
         masks[id].reset();
         return Entity(id, generations[id]);
@@ -58,6 +60,7 @@ public:
         Entity::IdType id = e.getId();
         masks[id].reset();
         aliveMask.reset(id);
+        activeMask.reset(id);
         generations[id]++;
         freeIds.push(id);
         alive.erase(std::remove(alive.begin(), alive.end(), id), alive.end());
@@ -73,11 +76,60 @@ public:
     }
 
     /**
+     * @brief Retrieves the const component mask of an entity.
+     * @param e Entity to check.
+     * @return Const reference to component mask.
+     */
+    const ComponentMask& getMask(Entity e) const {
+        return masks[e.getId()];
+    }
+
+    /**
      * @brief Retrieves list of currently active entity identifiers.
      * @return List of active entity IDs.
      */
     const std::vector<Entity::IdType>& getAlive() const {
         return alive;
+    }
+
+    /**
+     * @brief Retrieves the valid Entity handle for an active ID.
+     * @param id The entity identifier.
+     * @return Entity handle with the current generation, or INVALID_ENTITY if not alive.
+     */
+    Entity getEntity(Entity::IdType id) const {
+        if (id >= MAX_ENTITIES || !aliveMask.test(id)) return Entity(Entity::INVALID_ENTITY);
+        return Entity(id, generations[id]);
+    }
+
+    /**
+     * @brief Retrieves the generation counter of an entity slot.
+     * @param id The entity identifier.
+     * @return Current generation counter.
+     */
+    std::uint32_t getGeneration(Entity::IdType id) const {
+        if (id >= MAX_ENTITIES) return 0;
+        return generations[id];
+    }
+
+    /**
+     * @brief Sets the active state of an entity.
+     * @param e The entity to set the active state for.
+     * @param active The active state to set.
+     */
+
+    void setActive(Entity e, bool active) {
+    if (isValid(e)) activeMask.set(e.getId(), active);
+    }
+
+    /**
+     * @brief Checks if an entity is active.
+     * @param e The entity to check.
+     * @return True if the entity is active, false otherwise.
+     */
+
+    bool isActive(Entity e) const {
+        return isValid(e) && activeMask.test(e.getId());
     }
 
 private:
@@ -91,4 +143,7 @@ private:
     std::stack<Entity::IdType> freeIds;
     /** @brief Array of component masks indexable by entity ID. */
     std::array<ComponentMask, MAX_ENTITIES> masks;
+
+    /** @brief Bitset marking active entity.*/
+    std::bitset<MAX_ENTITIES> activeMask;
 };

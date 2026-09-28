@@ -91,5 +91,17 @@ FetchContent_MakeAvailable(tracy)
 add_subdirectory(engine)
 add_subdirectory(plugins)
 
+if(TARGET editor)
+    if(TARGET cinemachine_plugin)
+        add_dependencies(editor cinemachine_plugin)
+    endif()
+    if(TARGET astar_plugin)
+        add_dependencies(editor astar_plugin)
+    endif()
+    if(TARGET skymo_plugin)
+        add_dependencies(editor skymo_plugin)
+    endif()
+endif()
+
 message(STATUS "Configured engine workspace subdirectories")
 

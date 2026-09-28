@@ -23,11 +23,16 @@
 namespace EntityCloner {
     using namespace Engine;
 
-    static void copyReflectedFields(const ComponentReflection& refl, void* srcPtr, void* dstPtr) {
+    static void copyFields(const std::vector<ComponentField>& fields, void* srcPtr, void* dstPtr) {
         if (!srcPtr || !dstPtr) return;
-        for (const auto& field : refl.fields) {
+        for (const auto& field : fields) {
             char* srcField = static_cast<char*>(srcPtr) + field.offset;
             char* dstField = static_cast<char*>(dstPtr) + field.offset;
+
+            if (field.type == FieldType::Struct) {
+                copyFields(field.subFields, srcField, dstField);
+                continue;
+            }
 
             switch (field.type) {
             case FieldType::Float:
@@ -52,8 +57,32 @@ namespace EntityCloner {
             case FieldType::String:
                 *reinterpret_cast<std::string*>(dstField) = *reinterpret_cast<const std::string*>(srcField);
                 break;
+            case FieldType::Entity:
+                *reinterpret_cast<Entity*>(dstField) = *reinterpret_cast<const Entity*>(srcField);
+                break;
             default:
                 break;
+            }
+        }
+    }
+
+    static void copyReflectedFields(const ComponentReflection& refl, void* srcPtr, void* dstPtr) {
+        copyFields(refl.fields, srcPtr, dstPtr);
+    }
+
+    static void remapFields(const std::vector<ComponentField>& fields, void* compPtr, const std::unordered_map<Entity, Entity>& oldToNewMap) {
+        for (const auto& field : fields) {
+            char* fieldPtr = static_cast<char*>(compPtr) + field.offset;
+            if (field.type == FieldType::Struct) {
+                remapFields(field.subFields, fieldPtr, oldToNewMap);
+            } else if (field.type == FieldType::Entity) {
+                Entity* entRef = reinterpret_cast<Entity*>(fieldPtr);
+                if (entRef && entRef->getId() != Entity::INVALID_ENTITY) {
+                    auto it = oldToNewMap.find(*entRef);
+                    if (it != oldToNewMap.end()) {
+                        *entRef = it->second;
+                    }
+                }
             }
         }
     }
@@ -69,18 +98,7 @@ namespace EntityCloner {
                     void* compPtr = refl.get(registry, newEnt);
                     if (!compPtr) continue;
 
-                    for (const auto& field : refl.fields) {
-                        if (field.type == FieldType::Entity) {
-                            char* fieldPtr = static_cast<char*>(compPtr) + field.offset;
-                            Entity* entRef = reinterpret_cast<Entity*>(fieldPtr);
-                            if (entRef && entRef->getId() != Entity::INVALID_ENTITY) {
-                                auto it = oldToNewMap.find(*entRef);
-                                if (it != oldToNewMap.end()) {
-                                    *entRef = it->second;
-                                }
-                            }
-                        }
-                    }
+                    remapFields(refl.fields, compPtr, oldToNewMap);
                 }
             }
         }

@@ -23,7 +23,8 @@ namespace Engine {
         String,
         Vec2,
         Vec4,
-        Enum
+        Enum,
+        Struct
     };
 
 
@@ -36,6 +37,8 @@ namespace Engine {
         FieldType type;
         size_t offset;
         std::vector<std::string> enumOptions = {};
+        std::vector<ComponentField> subFields = {};
+        std::string structTypeName = "";
     };
 
     /**
@@ -62,6 +65,8 @@ namespace Engine {
         std::function<bool(Registry&, Entity)> has;
         std::function<void(Registry&, Entity)> remove;
         std::function<void*(Registry&, Entity)> get;
+        std::function<bool(const Registry&, Entity)> isEnabled;
+        std::function<void(Registry&, Entity, bool)> setEnabled;
     };
 
     /**
@@ -150,6 +155,8 @@ namespace Engine {
                 refl.has = [](Registry& reg, Entity e) { return reg.has<Type>(e); }; \
                 refl.remove = [](Registry& reg, Entity e) { reg.remove<Type>(e); }; \
                 refl.get = [](Registry& reg, Entity e) { return static_cast<void*>(reg.get<Type>(e)); }; \
+                refl.isEnabled = [](const Registry& reg, Entity e) { return reg.isComponentEnabled<Type>(e); }; \
+                refl.setEnabled = [](Registry& reg, Entity e, bool enabled) { reg.setComponentEnabled<Type>(e, enabled); }; \
                 auto init = InitFunc; \
                 init(refl); \
                 Engine::ComponentReflectionRegistry::getInstance().registerComponent(refl); \

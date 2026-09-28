@@ -19,15 +19,20 @@ PLUGIN_API void registerScriptReflection() {
         refl.category = "General";
         refl.displayName = "AStar Agent";
         refl.fields = {
+            { "navMode", Engine::FieldType::Enum, offsetof(AStarAgent, navMode), { "Auto", "Tilemap2D", "GridWorld3D" } },
             { "targetTransform", Engine::FieldType::Entity, offsetof(AStarAgent, targetTransform) },
             { "speed", Engine::FieldType::Float, offsetof(AStarAgent, speed) },
             { "allowDiagonal", Engine::FieldType::Bool, offsetof(AStarAgent, allowDiagonal) },
+            { "maxElevationStep", Engine::FieldType::Int, offsetof(AStarAgent, maxElevationStep) },
+            { "turnSpeed", Engine::FieldType::Float, offsetof(AStarAgent, turnSpeed) },
             { "showDebugPath", Engine::FieldType::Bool, offsetof(AStarAgent, showDebugPath) }
         };
         refl.add = [](Registry& reg, Entity e) { reg.emplace<AStarAgent>(e, AStarAgent{}); };
         refl.has = [](Registry& reg, Entity e) { return reg.has<AStarAgent>(e); };
         refl.remove = [](Registry& reg, Entity e) { reg.remove<AStarAgent>(e); };
         refl.get = [](Registry& reg, Entity e) { return static_cast<void*>(reg.get<AStarAgent>(e)); };
+        refl.isEnabled = [](const Registry& reg, Entity e) { return reg.isComponentEnabled<AStarAgent>(e); };
+        refl.setEnabled = [](Registry& reg, Entity e, bool enabled) { reg.setComponentEnabled<AStarAgent>(e, enabled); };
         Engine::ComponentReflectionRegistry::getInstance().registerComponent(refl);
     }
 }

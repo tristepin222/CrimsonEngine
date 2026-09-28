@@ -11,6 +11,7 @@
 #include "ecs/components/Camera.hpp"
 #include "ecs/components/Collider.hpp"
 #include "ecs/components/Grid.hpp"
+#include "ecs/components/GridWorldComponent.hpp"
 #include "ecs/components/IKSolver.hpp"
 #include "ecs/components/inputComponent.hpp"
 #include "ecs/components/LightComponent.hpp"
@@ -44,6 +45,8 @@ PLUGIN_API void registerEngineReflection() {
         refl.has = [](Registry& reg, Entity e) { return reg.has<AnimationControllerComponent>(e); };
         refl.remove = [](Registry& reg, Entity e) { reg.remove<AnimationControllerComponent>(e); };
         refl.get = [](Registry& reg, Entity e) { return static_cast<void*>(reg.get<AnimationControllerComponent>(e)); };
+        refl.isEnabled = [](const Registry& reg, Entity e) { return reg.isComponentEnabled<AnimationControllerComponent>(e); };
+        refl.setEnabled = [](Registry& reg, Entity e, bool enabled) { reg.setComponentEnabled<AnimationControllerComponent>(e, enabled); };
         Engine::ComponentReflectionRegistry::getInstance().registerComponent(refl);
     }
     {
@@ -61,6 +64,8 @@ PLUGIN_API void registerEngineReflection() {
         refl.has = [](Registry& reg, Entity e) { return reg.has<AnimatorComponent>(e); };
         refl.remove = [](Registry& reg, Entity e) { reg.remove<AnimatorComponent>(e); };
         refl.get = [](Registry& reg, Entity e) { return static_cast<void*>(reg.get<AnimatorComponent>(e)); };
+        refl.isEnabled = [](const Registry& reg, Entity e) { return reg.isComponentEnabled<AnimatorComponent>(e); };
+        refl.setEnabled = [](Registry& reg, Entity e, bool enabled) { reg.setComponentEnabled<AnimatorComponent>(e, enabled); };
         Engine::ComponentReflectionRegistry::getInstance().registerComponent(refl);
     }
     {
@@ -75,6 +80,8 @@ PLUGIN_API void registerEngineReflection() {
         refl.has = [](Registry& reg, Entity e) { return reg.has<AudioListenerComponent>(e); };
         refl.remove = [](Registry& reg, Entity e) { reg.remove<AudioListenerComponent>(e); };
         refl.get = [](Registry& reg, Entity e) { return static_cast<void*>(reg.get<AudioListenerComponent>(e)); };
+        refl.isEnabled = [](const Registry& reg, Entity e) { return reg.isComponentEnabled<AudioListenerComponent>(e); };
+        refl.setEnabled = [](Registry& reg, Entity e, bool enabled) { reg.setComponentEnabled<AudioListenerComponent>(e, enabled); };
         Engine::ComponentReflectionRegistry::getInstance().registerComponent(refl);
     }
     {
@@ -96,6 +103,8 @@ PLUGIN_API void registerEngineReflection() {
         refl.has = [](Registry& reg, Entity e) { return reg.has<AudioSourceComponent>(e); };
         refl.remove = [](Registry& reg, Entity e) { reg.remove<AudioSourceComponent>(e); };
         refl.get = [](Registry& reg, Entity e) { return static_cast<void*>(reg.get<AudioSourceComponent>(e)); };
+        refl.isEnabled = [](const Registry& reg, Entity e) { return reg.isComponentEnabled<AudioSourceComponent>(e); };
+        refl.setEnabled = [](Registry& reg, Entity e, bool enabled) { reg.setComponentEnabled<AudioSourceComponent>(e, enabled); };
         Engine::ComponentReflectionRegistry::getInstance().registerComponent(refl);
     }
     {
@@ -115,6 +124,8 @@ PLUGIN_API void registerEngineReflection() {
         refl.has = [](Registry& reg, Entity e) { return reg.has<Camera>(e); };
         refl.remove = [](Registry& reg, Entity e) { reg.remove<Camera>(e); };
         refl.get = [](Registry& reg, Entity e) { return static_cast<void*>(reg.get<Camera>(e)); };
+        refl.isEnabled = [](const Registry& reg, Entity e) { return reg.isComponentEnabled<Camera>(e); };
+        refl.setEnabled = [](Registry& reg, Entity e, bool enabled) { reg.setComponentEnabled<Camera>(e, enabled); };
         Engine::ComponentReflectionRegistry::getInstance().registerComponent(refl);
     }
     {
@@ -132,6 +143,8 @@ PLUGIN_API void registerEngineReflection() {
         refl.has = [](Registry& reg, Entity e) { return reg.has<ColliderComponent>(e); };
         refl.remove = [](Registry& reg, Entity e) { reg.remove<ColliderComponent>(e); };
         refl.get = [](Registry& reg, Entity e) { return static_cast<void*>(reg.get<ColliderComponent>(e)); };
+        refl.isEnabled = [](const Registry& reg, Entity e) { return reg.isComponentEnabled<ColliderComponent>(e); };
+        refl.setEnabled = [](Registry& reg, Entity e, bool enabled) { reg.setComponentEnabled<ColliderComponent>(e, enabled); };
         Engine::ComponentReflectionRegistry::getInstance().registerComponent(refl);
     }
     {
@@ -150,6 +163,30 @@ PLUGIN_API void registerEngineReflection() {
         refl.has = [](Registry& reg, Entity e) { return reg.has<Grid>(e); };
         refl.remove = [](Registry& reg, Entity e) { reg.remove<Grid>(e); };
         refl.get = [](Registry& reg, Entity e) { return static_cast<void*>(reg.get<Grid>(e)); };
+        refl.isEnabled = [](const Registry& reg, Entity e) { return reg.isComponentEnabled<Grid>(e); };
+        refl.setEnabled = [](Registry& reg, Entity e, bool enabled) { reg.setComponentEnabled<Grid>(e, enabled); };
+        Engine::ComponentReflectionRegistry::getInstance().registerComponent(refl);
+    }
+    {
+        Engine::ComponentReflection refl;
+        refl.name = "GridWorld";
+        refl.category = "World";
+        refl.displayName = "Grid World";
+        refl.fields = {
+            { "cellSize", Engine::FieldType::Float, offsetof(Engine::GridWorldComponent, cellSize) },
+            { "cellHeight", Engine::FieldType::Float, offsetof(Engine::GridWorldComponent, cellHeight) },
+            { "originOffset", Engine::FieldType::Vec3, offsetof(Engine::GridWorldComponent, originOffset) },
+            { "showGridOverlay", Engine::FieldType::Bool, offsetof(Engine::GridWorldComponent, showGridOverlay) },
+            { "showCursorHover", Engine::FieldType::Bool, offsetof(Engine::GridWorldComponent, showCursorHover) },
+            { "gridLineColor", Engine::FieldType::Vec4, offsetof(Engine::GridWorldComponent, gridLineColor) },
+            { "cursorHoverColor", Engine::FieldType::Vec4, offsetof(Engine::GridWorldComponent, cursorHoverColor) }
+        };
+        refl.add = [](Registry& reg, Entity e) { reg.emplace<Engine::GridWorldComponent>(e, Engine::GridWorldComponent{}); };
+        refl.has = [](Registry& reg, Entity e) { return reg.has<Engine::GridWorldComponent>(e); };
+        refl.remove = [](Registry& reg, Entity e) { reg.remove<Engine::GridWorldComponent>(e); };
+        refl.get = [](Registry& reg, Entity e) { return static_cast<void*>(reg.get<Engine::GridWorldComponent>(e)); };
+        refl.isEnabled = [](const Registry& reg, Entity e) { return reg.isComponentEnabled<Engine::GridWorldComponent>(e); };
+        refl.setEnabled = [](Registry& reg, Entity e, bool enabled) { reg.setComponentEnabled<Engine::GridWorldComponent>(e, enabled); };
         Engine::ComponentReflectionRegistry::getInstance().registerComponent(refl);
     }
     {
@@ -172,6 +209,8 @@ PLUGIN_API void registerEngineReflection() {
         refl.has = [](Registry& reg, Entity e) { return reg.has<IKSolverComponent>(e); };
         refl.remove = [](Registry& reg, Entity e) { reg.remove<IKSolverComponent>(e); };
         refl.get = [](Registry& reg, Entity e) { return static_cast<void*>(reg.get<IKSolverComponent>(e)); };
+        refl.isEnabled = [](const Registry& reg, Entity e) { return reg.isComponentEnabled<IKSolverComponent>(e); };
+        refl.setEnabled = [](Registry& reg, Entity e, bool enabled) { reg.setComponentEnabled<IKSolverComponent>(e, enabled); };
         Engine::ComponentReflectionRegistry::getInstance().registerComponent(refl);
     }
     {
@@ -187,6 +226,8 @@ PLUGIN_API void registerEngineReflection() {
         refl.has = [](Registry& reg, Entity e) { return reg.has<InputComponent>(e); };
         refl.remove = [](Registry& reg, Entity e) { reg.remove<InputComponent>(e); };
         refl.get = [](Registry& reg, Entity e) { return static_cast<void*>(reg.get<InputComponent>(e)); };
+        refl.isEnabled = [](const Registry& reg, Entity e) { return reg.isComponentEnabled<InputComponent>(e); };
+        refl.setEnabled = [](Registry& reg, Entity e, bool enabled) { reg.setComponentEnabled<InputComponent>(e, enabled); };
         Engine::ComponentReflectionRegistry::getInstance().registerComponent(refl);
     }
     {
@@ -195,14 +236,24 @@ PLUGIN_API void registerEngineReflection() {
         refl.category = "Rendering & Lights";
         refl.displayName = "Light";
         refl.fields = {
+            { "type", Engine::FieldType::Enum, offsetof(Engine::LightComponent, type), { "Directional", "Point", "Spot" } },
+            { "direction", Engine::FieldType::Vec3, offsetof(Engine::LightComponent, direction) },
+            { "pitch", Engine::FieldType::Float, offsetof(Engine::LightComponent, pitch) },
+            { "yaw", Engine::FieldType::Float, offsetof(Engine::LightComponent, yaw) },
             { "color", Engine::FieldType::Vec3, offsetof(Engine::LightComponent, color) },
             { "intensity", Engine::FieldType::Float, offsetof(Engine::LightComponent, intensity) },
-            { "range", Engine::FieldType::Float, offsetof(Engine::LightComponent, range) }
+            { "range", Engine::FieldType::Float, offsetof(Engine::LightComponent, range) },
+            { "castShadows", Engine::FieldType::Bool, offsetof(Engine::LightComponent, castShadows) },
+            { "shadowBias", Engine::FieldType::Float, offsetof(Engine::LightComponent, shadowBias) },
+            { "shadowNormalBias", Engine::FieldType::Float, offsetof(Engine::LightComponent, shadowNormalBias) },
+            { "shadowDistance", Engine::FieldType::Float, offsetof(Engine::LightComponent, shadowDistance) }
         };
         refl.add = [](Registry& reg, Entity e) { reg.emplace<Engine::LightComponent>(e, Engine::LightComponent{}); };
         refl.has = [](Registry& reg, Entity e) { return reg.has<Engine::LightComponent>(e); };
         refl.remove = [](Registry& reg, Entity e) { reg.remove<Engine::LightComponent>(e); };
         refl.get = [](Registry& reg, Entity e) { return static_cast<void*>(reg.get<Engine::LightComponent>(e)); };
+        refl.isEnabled = [](const Registry& reg, Entity e) { return reg.isComponentEnabled<Engine::LightComponent>(e); };
+        refl.setEnabled = [](Registry& reg, Entity e, bool enabled) { reg.setComponentEnabled<Engine::LightComponent>(e, enabled); };
         Engine::ComponentReflectionRegistry::getInstance().registerComponent(refl);
     }
     {
@@ -223,6 +274,8 @@ PLUGIN_API void registerEngineReflection() {
         refl.has = [](Registry& reg, Entity e) { return reg.has<Material>(e); };
         refl.remove = [](Registry& reg, Entity e) { reg.remove<Material>(e); };
         refl.get = [](Registry& reg, Entity e) { return static_cast<void*>(reg.get<Material>(e)); };
+        refl.isEnabled = [](const Registry& reg, Entity e) { return reg.isComponentEnabled<Material>(e); };
+        refl.setEnabled = [](Registry& reg, Entity e, bool enabled) { reg.setComponentEnabled<Material>(e, enabled); };
         Engine::ComponentReflectionRegistry::getInstance().registerComponent(refl);
     }
     {
@@ -240,6 +293,8 @@ PLUGIN_API void registerEngineReflection() {
         refl.has = [](Registry& reg, Entity e) { return reg.has<PlayerControllerComponent>(e); };
         refl.remove = [](Registry& reg, Entity e) { reg.remove<PlayerControllerComponent>(e); };
         refl.get = [](Registry& reg, Entity e) { return static_cast<void*>(reg.get<PlayerControllerComponent>(e)); };
+        refl.isEnabled = [](const Registry& reg, Entity e) { return reg.isComponentEnabled<PlayerControllerComponent>(e); };
+        refl.setEnabled = [](Registry& reg, Entity e, bool enabled) { reg.setComponentEnabled<PlayerControllerComponent>(e, enabled); };
         Engine::ComponentReflectionRegistry::getInstance().registerComponent(refl);
     }
     {
@@ -255,6 +310,8 @@ PLUGIN_API void registerEngineReflection() {
         refl.has = [](Registry& reg, Entity e) { return reg.has<Engine::PrefabComponent>(e); };
         refl.remove = [](Registry& reg, Entity e) { reg.remove<Engine::PrefabComponent>(e); };
         refl.get = [](Registry& reg, Entity e) { return static_cast<void*>(reg.get<Engine::PrefabComponent>(e)); };
+        refl.isEnabled = [](const Registry& reg, Entity e) { return reg.isComponentEnabled<Engine::PrefabComponent>(e); };
+        refl.setEnabled = [](Registry& reg, Entity e, bool enabled) { reg.setComponentEnabled<Engine::PrefabComponent>(e, enabled); };
         Engine::ComponentReflectionRegistry::getInstance().registerComponent(refl);
     }
     {
@@ -270,6 +327,8 @@ PLUGIN_API void registerEngineReflection() {
         refl.has = [](Registry& reg, Entity e) { return reg.has<Renderable>(e); };
         refl.remove = [](Registry& reg, Entity e) { reg.remove<Renderable>(e); };
         refl.get = [](Registry& reg, Entity e) { return static_cast<void*>(reg.get<Renderable>(e)); };
+        refl.isEnabled = [](const Registry& reg, Entity e) { return reg.isComponentEnabled<Renderable>(e); };
+        refl.setEnabled = [](Registry& reg, Entity e, bool enabled) { reg.setComponentEnabled<Renderable>(e, enabled); };
         Engine::ComponentReflectionRegistry::getInstance().registerComponent(refl);
     }
     {
@@ -300,6 +359,8 @@ PLUGIN_API void registerEngineReflection() {
         refl.has = [](Registry& reg, Entity e) { return reg.has<RigidBodyComponent>(e); };
         refl.remove = [](Registry& reg, Entity e) { reg.remove<RigidBodyComponent>(e); };
         refl.get = [](Registry& reg, Entity e) { return static_cast<void*>(reg.get<RigidBodyComponent>(e)); };
+        refl.isEnabled = [](const Registry& reg, Entity e) { return reg.isComponentEnabled<RigidBodyComponent>(e); };
+        refl.setEnabled = [](Registry& reg, Entity e, bool enabled) { reg.setComponentEnabled<RigidBodyComponent>(e, enabled); };
         Engine::ComponentReflectionRegistry::getInstance().registerComponent(refl);
     }
     {
@@ -313,6 +374,8 @@ PLUGIN_API void registerEngineReflection() {
         refl.has = [](Registry& reg, Entity e) { return reg.has<SkeletonComponent>(e); };
         refl.remove = [](Registry& reg, Entity e) { reg.remove<SkeletonComponent>(e); };
         refl.get = [](Registry& reg, Entity e) { return static_cast<void*>(reg.get<SkeletonComponent>(e)); };
+        refl.isEnabled = [](const Registry& reg, Entity e) { return reg.isComponentEnabled<SkeletonComponent>(e); };
+        refl.setEnabled = [](Registry& reg, Entity e, bool enabled) { reg.setComponentEnabled<SkeletonComponent>(e, enabled); };
         Engine::ComponentReflectionRegistry::getInstance().registerComponent(refl);
     }
     {
@@ -331,6 +394,8 @@ PLUGIN_API void registerEngineReflection() {
         refl.has = [](Registry& reg, Entity e) { return reg.has<Engine::SpriteRenderer>(e); };
         refl.remove = [](Registry& reg, Entity e) { reg.remove<Engine::SpriteRenderer>(e); };
         refl.get = [](Registry& reg, Entity e) { return static_cast<void*>(reg.get<Engine::SpriteRenderer>(e)); };
+        refl.isEnabled = [](const Registry& reg, Entity e) { return reg.isComponentEnabled<Engine::SpriteRenderer>(e); };
+        refl.setEnabled = [](Registry& reg, Entity e, bool enabled) { reg.setComponentEnabled<Engine::SpriteRenderer>(e, enabled); };
         Engine::ComponentReflectionRegistry::getInstance().registerComponent(refl);
     }
     {
@@ -348,6 +413,8 @@ PLUGIN_API void registerEngineReflection() {
         refl.has = [](Registry& reg, Entity e) { return reg.has<Engine::TilemapComponent>(e); };
         refl.remove = [](Registry& reg, Entity e) { reg.remove<Engine::TilemapComponent>(e); };
         refl.get = [](Registry& reg, Entity e) { return static_cast<void*>(reg.get<Engine::TilemapComponent>(e)); };
+        refl.isEnabled = [](const Registry& reg, Entity e) { return reg.isComponentEnabled<Engine::TilemapComponent>(e); };
+        refl.setEnabled = [](Registry& reg, Entity e, bool enabled) { reg.setComponentEnabled<Engine::TilemapComponent>(e, enabled); };
         Engine::ComponentReflectionRegistry::getInstance().registerComponent(refl);
     }
     {
@@ -364,6 +431,8 @@ PLUGIN_API void registerEngineReflection() {
         refl.has = [](Registry& reg, Entity e) { return reg.has<Transform>(e); };
         refl.remove = [](Registry& reg, Entity e) { reg.remove<Transform>(e); };
         refl.get = [](Registry& reg, Entity e) { return static_cast<void*>(reg.get<Transform>(e)); };
+        refl.isEnabled = [](const Registry& reg, Entity e) { return reg.isComponentEnabled<Transform>(e); };
+        refl.setEnabled = [](Registry& reg, Entity e, bool enabled) { reg.setComponentEnabled<Transform>(e, enabled); };
         Engine::ComponentReflectionRegistry::getInstance().registerComponent(refl);
     }
     {
@@ -379,6 +448,8 @@ PLUGIN_API void registerEngineReflection() {
         refl.has = [](Registry& reg, Entity e) { return reg.has<Engine::CanvasComponent>(e); };
         refl.remove = [](Registry& reg, Entity e) { reg.remove<Engine::CanvasComponent>(e); };
         refl.get = [](Registry& reg, Entity e) { return static_cast<void*>(reg.get<Engine::CanvasComponent>(e)); };
+        refl.isEnabled = [](const Registry& reg, Entity e) { return reg.isComponentEnabled<Engine::CanvasComponent>(e); };
+        refl.setEnabled = [](Registry& reg, Entity e, bool enabled) { reg.setComponentEnabled<Engine::CanvasComponent>(e, enabled); };
         Engine::ComponentReflectionRegistry::getInstance().registerComponent(refl);
     }
     {
@@ -397,6 +468,8 @@ PLUGIN_API void registerEngineReflection() {
         refl.has = [](Registry& reg, Entity e) { return reg.has<Engine::RectTransform>(e); };
         refl.remove = [](Registry& reg, Entity e) { reg.remove<Engine::RectTransform>(e); };
         refl.get = [](Registry& reg, Entity e) { return static_cast<void*>(reg.get<Engine::RectTransform>(e)); };
+        refl.isEnabled = [](const Registry& reg, Entity e) { return reg.isComponentEnabled<Engine::RectTransform>(e); };
+        refl.setEnabled = [](Registry& reg, Entity e, bool enabled) { reg.setComponentEnabled<Engine::RectTransform>(e, enabled); };
         Engine::ComponentReflectionRegistry::getInstance().registerComponent(refl);
     }
     {
@@ -412,6 +485,8 @@ PLUGIN_API void registerEngineReflection() {
         refl.has = [](Registry& reg, Entity e) { return reg.has<Engine::UIPanelComponent>(e); };
         refl.remove = [](Registry& reg, Entity e) { reg.remove<Engine::UIPanelComponent>(e); };
         refl.get = [](Registry& reg, Entity e) { return static_cast<void*>(reg.get<Engine::UIPanelComponent>(e)); };
+        refl.isEnabled = [](const Registry& reg, Entity e) { return reg.isComponentEnabled<Engine::UIPanelComponent>(e); };
+        refl.setEnabled = [](Registry& reg, Entity e, bool enabled) { reg.setComponentEnabled<Engine::UIPanelComponent>(e, enabled); };
         Engine::ComponentReflectionRegistry::getInstance().registerComponent(refl);
     }
     {
@@ -427,6 +502,8 @@ PLUGIN_API void registerEngineReflection() {
         refl.has = [](Registry& reg, Entity e) { return reg.has<Engine::UIImageComponent>(e); };
         refl.remove = [](Registry& reg, Entity e) { reg.remove<Engine::UIImageComponent>(e); };
         refl.get = [](Registry& reg, Entity e) { return static_cast<void*>(reg.get<Engine::UIImageComponent>(e)); };
+        refl.isEnabled = [](const Registry& reg, Entity e) { return reg.isComponentEnabled<Engine::UIImageComponent>(e); };
+        refl.setEnabled = [](Registry& reg, Entity e, bool enabled) { reg.setComponentEnabled<Engine::UIImageComponent>(e, enabled); };
         Engine::ComponentReflectionRegistry::getInstance().registerComponent(refl);
     }
     {
@@ -444,6 +521,8 @@ PLUGIN_API void registerEngineReflection() {
         refl.has = [](Registry& reg, Entity e) { return reg.has<Engine::UITextComponent>(e); };
         refl.remove = [](Registry& reg, Entity e) { reg.remove<Engine::UITextComponent>(e); };
         refl.get = [](Registry& reg, Entity e) { return static_cast<void*>(reg.get<Engine::UITextComponent>(e)); };
+        refl.isEnabled = [](const Registry& reg, Entity e) { return reg.isComponentEnabled<Engine::UITextComponent>(e); };
+        refl.setEnabled = [](Registry& reg, Entity e, bool enabled) { reg.setComponentEnabled<Engine::UITextComponent>(e, enabled); };
         Engine::ComponentReflectionRegistry::getInstance().registerComponent(refl);
     }
     {
@@ -463,6 +542,8 @@ PLUGIN_API void registerEngineReflection() {
         refl.has = [](Registry& reg, Entity e) { return reg.has<Engine::UIButtonComponent>(e); };
         refl.remove = [](Registry& reg, Entity e) { reg.remove<Engine::UIButtonComponent>(e); };
         refl.get = [](Registry& reg, Entity e) { return static_cast<void*>(reg.get<Engine::UIButtonComponent>(e)); };
+        refl.isEnabled = [](const Registry& reg, Entity e) { return reg.isComponentEnabled<Engine::UIButtonComponent>(e); };
+        refl.setEnabled = [](Registry& reg, Entity e, bool enabled) { reg.setComponentEnabled<Engine::UIButtonComponent>(e, enabled); };
         Engine::ComponentReflectionRegistry::getInstance().registerComponent(refl);
     }
     {
@@ -480,6 +561,8 @@ PLUGIN_API void registerEngineReflection() {
         refl.has = [](Registry& reg, Entity e) { return reg.has<Engine::UIGridLayoutGroupComponent>(e); };
         refl.remove = [](Registry& reg, Entity e) { reg.remove<Engine::UIGridLayoutGroupComponent>(e); };
         refl.get = [](Registry& reg, Entity e) { return static_cast<void*>(reg.get<Engine::UIGridLayoutGroupComponent>(e)); };
+        refl.isEnabled = [](const Registry& reg, Entity e) { return reg.isComponentEnabled<Engine::UIGridLayoutGroupComponent>(e); };
+        refl.setEnabled = [](Registry& reg, Entity e, bool enabled) { reg.setComponentEnabled<Engine::UIGridLayoutGroupComponent>(e, enabled); };
         Engine::ComponentReflectionRegistry::getInstance().registerComponent(refl);
     }
     {
@@ -496,6 +579,8 @@ PLUGIN_API void registerEngineReflection() {
         refl.has = [](Registry& reg, Entity e) { return reg.has<Engine::UILayoutGroupComponent>(e); };
         refl.remove = [](Registry& reg, Entity e) { reg.remove<Engine::UILayoutGroupComponent>(e); };
         refl.get = [](Registry& reg, Entity e) { return static_cast<void*>(reg.get<Engine::UILayoutGroupComponent>(e)); };
+        refl.isEnabled = [](const Registry& reg, Entity e) { return reg.isComponentEnabled<Engine::UILayoutGroupComponent>(e); };
+        refl.setEnabled = [](Registry& reg, Entity e, bool enabled) { reg.setComponentEnabled<Engine::UILayoutGroupComponent>(e, enabled); };
         Engine::ComponentReflectionRegistry::getInstance().registerComponent(refl);
     }
     {
@@ -513,6 +598,8 @@ PLUGIN_API void registerEngineReflection() {
         refl.has = [](Registry& reg, Entity e) { return reg.has<Engine::UIScrollRectComponent>(e); };
         refl.remove = [](Registry& reg, Entity e) { reg.remove<Engine::UIScrollRectComponent>(e); };
         refl.get = [](Registry& reg, Entity e) { return static_cast<void*>(reg.get<Engine::UIScrollRectComponent>(e)); };
+        refl.isEnabled = [](const Registry& reg, Entity e) { return reg.isComponentEnabled<Engine::UIScrollRectComponent>(e); };
+        refl.setEnabled = [](Registry& reg, Entity e, bool enabled) { reg.setComponentEnabled<Engine::UIScrollRectComponent>(e, enabled); };
         Engine::ComponentReflectionRegistry::getInstance().registerComponent(refl);
     }
     {
@@ -532,6 +619,8 @@ PLUGIN_API void registerEngineReflection() {
         refl.has = [](Registry& reg, Entity e) { return reg.has<Engine::UISliderComponent>(e); };
         refl.remove = [](Registry& reg, Entity e) { reg.remove<Engine::UISliderComponent>(e); };
         refl.get = [](Registry& reg, Entity e) { return static_cast<void*>(reg.get<Engine::UISliderComponent>(e)); };
+        refl.isEnabled = [](const Registry& reg, Entity e) { return reg.isComponentEnabled<Engine::UISliderComponent>(e); };
+        refl.setEnabled = [](Registry& reg, Entity e, bool enabled) { reg.setComponentEnabled<Engine::UISliderComponent>(e, enabled); };
         Engine::ComponentReflectionRegistry::getInstance().registerComponent(refl);
     }
     {
@@ -550,6 +639,8 @@ PLUGIN_API void registerEngineReflection() {
         refl.has = [](Registry& reg, Entity e) { return reg.has<Engine::UIToggleComponent>(e); };
         refl.remove = [](Registry& reg, Entity e) { reg.remove<Engine::UIToggleComponent>(e); };
         refl.get = [](Registry& reg, Entity e) { return static_cast<void*>(reg.get<Engine::UIToggleComponent>(e)); };
+        refl.isEnabled = [](const Registry& reg, Entity e) { return reg.isComponentEnabled<Engine::UIToggleComponent>(e); };
+        refl.setEnabled = [](Registry& reg, Entity e, bool enabled) { reg.setComponentEnabled<Engine::UIToggleComponent>(e, enabled); };
         Engine::ComponentReflectionRegistry::getInstance().registerComponent(refl);
     }
 }

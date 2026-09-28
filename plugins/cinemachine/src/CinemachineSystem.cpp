@@ -68,8 +68,8 @@ glm::mat4 getJointWorldMatrix(Registry& registry, Entity entity, const std::stri
     return getEntityWorldMatrix(registry, entity) * modelMatrix;
 }
 
-CinemachineSystem::CinemachineSystem(Registry& reg, VulkanRenderer& renderer, EditorModeState& mode)
-    : registry(reg), editorMode(mode) {}
+CinemachineSystem::CinemachineSystem(Registry& reg, VulkanRenderer& rend, EditorModeState& mode)
+    : registry(reg), renderer(rend), editorMode(mode) {}
 
 void CinemachineSystem::update(float dt) {
     // Resolve targets by name on load or if target IDs are invalid/incorrect
@@ -114,6 +114,11 @@ void CinemachineSystem::update(float dt) {
                 }
             }
         }
+    }
+
+    // Only update and control the camera during Play Mode
+    if (!editorMode.isPlaying) {
+        return;
     }
 
     // 1. Find the highest priority active virtual camera
@@ -424,12 +429,22 @@ void CinemachineSystem::update(float dt) {
     // 4. Update the main scene camera (first active non-editor camera in registry)
     for (auto [entity, camDummy] : registry.view<Camera>()) {
         if (!registry.has<EditorCamera>(entity)) {
-            if (auto* transform = registry.get<Transform>(entity)) {
+            auto* transform = registry.get<Transform>(entity);
+            auto* cam = registry.get<Camera>(entity);
+            if (transform && cam) {
                 transform->position = finalPos;
                 transform->rotation = finalRot;
-            }
-            if (auto* cam = registry.get<Camera>(entity)) {
                 cam->fov = activeVcam->fov;
+
+                int width = 0, height = 0;
+                glfwGetWindowSize(renderer.getWindow(), &width, &height);
+                if (height > 0) cam->aspect = static_cast<float>(width) / static_cast<float>(height);
+
+                if (editorMode.isPlaying) {
+                    glm::mat4 vp = cam->projection() * cam->view(*transform);
+                    renderer.setActiveCamera(cam->projection(), transform->position, cam->view(*transform));
+                    renderer.setGameplayCamera(vp, transform->position);
+                }
             }
             break; // Only update one main camera
         }

@@ -98,6 +98,21 @@ public:
 
 
     /**
+     * @brief Finds and returns a registered system of type T.
+     * @tparam T The system type to find.
+     * @return std::shared_ptr<T> Pointer to the system if found, nullptr otherwise.
+     */
+    template<typename T>
+    std::shared_ptr<T> getSystem() {
+        for (auto& system : systems) {
+            if (auto casted = std::dynamic_pointer_cast<T>(system)) {
+                return casted;
+            }
+        }
+        return nullptr;
+    }
+
+    /**
      * @brief Removes and releases all registered systems.
      * Call this before destroying Vulkan resources to ensure systems
      * (which may own GPU pipelines or descriptors) are shut down first.

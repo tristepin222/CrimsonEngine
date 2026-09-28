@@ -60,9 +60,11 @@ int main(int argc, char* argv[]) {
         Engine::Application app(config);
         app.run();
 
-
     } catch (const std::exception& e) {
         std::cerr << "[Editor] Fatal exception: " << e.what() << std::endl;
+        return EXIT_FAILURE;
+    } catch (...) {
+        std::cerr << "[Editor] Unknown non-std exception caught!" << std::endl;
         return EXIT_FAILURE;
     }
 

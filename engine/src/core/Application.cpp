@@ -13,6 +13,8 @@
 #include "ecs/systems/PlayerControllerSystem.hpp"
 #include "ecs/systems/AudioSystem.hpp"
 #include "ecs/systems/TilemapSystem.hpp"
+#include "ecs/systems/TerrainSystem.hpp"
+#include "ecs/systems/GridWorldSystem.hpp"
 #include "ecs/systems/UISystem.hpp"
 #include "ecs/systems/SpriteSystem.hpp"
 #include "scenes/Scene.hpp"
@@ -26,6 +28,7 @@
 #include "profiler/Profiler.hpp"
 #include "ecs/components/Camera.hpp"
 #include "ecs/components/inputComponent.hpp"
+#include "renderer/ShaderCompiler.hpp"
 
 
 namespace Engine {
@@ -68,6 +71,108 @@ namespace Engine {
             std::string sceneVal = JSONUtils::extractStringValue(content, "startScenePath");
             if (!sceneVal.empty()) config.startScenePath = sceneVal;
 
+            bool shadowsEnabled = true;
+            if (JSONUtils::extractBoolValue(content, "shadowsEnabled", shadowsEnabled)) {
+                config.shadowSettings.enabled = shadowsEnabled;
+                config.hasCustomShadowSettings = true;
+            }
+            float shadowRes = 0.0f;
+            if (JSONUtils::extractFloatValue(content, "shadowResolution", shadowRes)) {
+                config.shadowSettings.resolution = static_cast<uint32_t>(shadowRes);
+                config.hasCustomShadowSettings = true;
+            }
+            float shadowDist = 0.0f;
+            if (JSONUtils::extractFloatValue(content, "shadowDistance", shadowDist)) {
+                config.shadowSettings.maxDistance = shadowDist;
+                config.hasCustomShadowSettings = true;
+            }
+            float shadowBias = 0.0f;
+            if (JSONUtils::extractFloatValue(content, "shadowBias", shadowBias)) {
+                config.shadowSettings.bias = shadowBias;
+                config.hasCustomShadowSettings = true;
+            }
+            float shadowNormBias = 0.0f;
+            if (JSONUtils::extractFloatValue(content, "shadowNormalBias", shadowNormBias)) {
+                if (shadowNormBias < 0.05f) {
+                    shadowNormBias = 1.5f; // Upgrade legacy millimeter bias to texel units
+                }
+                config.shadowSettings.normalBias = shadowNormBias;
+                config.hasCustomShadowSettings = true;
+            }
+            float cascadeLambda = 0.0f;
+            if (JSONUtils::extractFloatValue(content, "cascadeSplitLambda", cascadeLambda)) {
+                config.shadowSettings.cascadeSplitLambda = std::clamp(cascadeLambda, 0.1f, 0.99f);
+                config.hasCustomShadowSettings = true;
+            }
+            bool softShadows = true;
+            if (JSONUtils::extractBoolValue(content, "softShadows", softShadows)) {
+                config.shadowSettings.softShadows = softShadows;
+                config.shadowSettings.pcfSamples = softShadows ? 16 : 1;
+                config.hasCustomShadowSettings = true;
+            }
+
+            float tonemapModeVal = 0.0f;
+            if (JSONUtils::extractFloatValue(content, "tonemapperMode", tonemapModeVal)) {
+                config.tonemapSettings.mode = static_cast<TonemapperMode>(static_cast<int>(tonemapModeVal));
+                config.hasCustomTonemapSettings = true;
+            }
+            float tonemapExposure = 1.0f;
+            if (JSONUtils::extractFloatValue(content, "tonemapExposure", tonemapExposure)) {
+                config.tonemapSettings.exposure = tonemapExposure;
+                config.hasCustomTonemapSettings = true;
+            }
+            float tonemapGamma = 2.2f;
+            if (JSONUtils::extractFloatValue(content, "tonemapGamma", tonemapGamma)) {
+                config.tonemapSettings.gamma = tonemapGamma;
+                config.hasCustomTonemapSettings = true;
+            }
+            float tonemapContrast = 1.0f;
+            if (JSONUtils::extractFloatValue(content, "tonemapContrast", tonemapContrast)) {
+                config.tonemapSettings.contrast = tonemapContrast;
+                config.hasCustomTonemapSettings = true;
+            }
+            float tonemapSaturation = 1.0f;
+            if (JSONUtils::extractFloatValue(content, "tonemapSaturation", tonemapSaturation)) {
+                config.tonemapSettings.saturation = tonemapSaturation;
+                config.hasCustomTonemapSettings = true;
+            }
+
+            bool ssaoEnabled = true;
+            if (JSONUtils::extractBoolValue(content, "ssaoEnabled", ssaoEnabled)) {
+                config.ssaoSettings.enabled = ssaoEnabled;
+                config.hasCustomSSAOSettings = true;
+            }
+            float ssaoRadius = 0.5f;
+            if (JSONUtils::extractFloatValue(content, "ssaoRadius", ssaoRadius)) {
+                config.ssaoSettings.radius = ssaoRadius;
+                config.hasCustomSSAOSettings = true;
+            }
+            float ssaoBias = 0.025f;
+            if (JSONUtils::extractFloatValue(content, "ssaoBias", ssaoBias)) {
+                config.ssaoSettings.bias = ssaoBias;
+                config.hasCustomSSAOSettings = true;
+            }
+            float ssaoIntensity = 1.5f;
+            if (JSONUtils::extractFloatValue(content, "ssaoIntensity", ssaoIntensity)) {
+                config.ssaoSettings.intensity = ssaoIntensity;
+                config.hasCustomSSAOSettings = true;
+            }
+            float ssaoPower = 1.5f;
+            if (JSONUtils::extractFloatValue(content, "ssaoPower", ssaoPower)) {
+                config.ssaoSettings.power = ssaoPower;
+                config.hasCustomSSAOSettings = true;
+            }
+            float ssaoSamples = 16.0f;
+            if (JSONUtils::extractFloatValue(content, "ssaoSamples", ssaoSamples)) {
+                config.ssaoSettings.sampleCount = static_cast<int>(ssaoSamples);
+                config.hasCustomSSAOSettings = true;
+            }
+            bool ssaoDebugAO = false;
+            if (JSONUtils::extractBoolValue(content, "ssaoDebugAO", ssaoDebugAO)) {
+                config.ssaoSettings.debugAO = ssaoDebugAO;
+                config.hasCustomSSAOSettings = true;
+            }
+
             std::cout << "[Application] Config loaded from project.settings" << std::endl;
         } else {
             std::cout << "[Application] project.settings not found, using configurations from code" << std::endl;
@@ -87,10 +192,27 @@ namespace Engine {
         if (!window) {
             throw std::runtime_error("Failed to create GLFW window");
         }
+        glfwSetInputMode(window, GLFW_STICKY_KEYS, GLFW_TRUE);
 
         std::cout << "[Application] GLFW window created successfully" << std::endl;
 
-        renderer = std::make_unique<VulkanRenderer>(window, config.exeDir);
+        ShaderCompiler::initialize(config.projectPath, config.exeDir);
+
+        try {
+            renderer = std::make_unique<VulkanRenderer>(window, config.exeDir);
+        } catch (const std::exception& e) {
+            std::cerr << "[Application] FATAL exception constructing VulkanRenderer: " << e.what() << std::endl;
+            throw;
+        }
+        if (config.hasCustomShadowSettings) {
+            renderer->setShadowSettings(config.shadowSettings);
+        }
+        if (config.hasCustomTonemapSettings) {
+            renderer->setTonemapSettings(config.tonemapSettings);
+        }
+        if (config.hasCustomSSAOSettings) {
+            renderer->setSSAOSettings(config.ssaoSettings);
+        }
 
         std::cout << "[Application] VulkanRenderer initialized successfully" << std::endl;
 
@@ -103,12 +225,16 @@ namespace Engine {
         auto playerControllerSystem = std::make_shared<PlayerControllerSystem>(registry, *renderer, editorMode);
         auto audioSystem = std::make_shared<AudioSystem>(registry, editorMode);
         auto tilemapSystem = std::make_shared<TilemapSystem>(registry, *renderer);
+        auto terrainSystem = std::make_shared<TerrainSystem>(registry, *renderer);
+        auto gridWorldSystem = std::make_shared<GridWorldSystem>(registry, *renderer, editorMode);
         auto spriteSystem  = std::make_shared<SpriteSystem>(registry, *renderer);
         uiSystem = std::make_shared<UISystem>(registry, *renderer);
 
         systemManager.addSystem(inputSystem);
         systemManager.addSystem(cameraSystem);
         systemManager.addSystem(tilemapSystem);
+        systemManager.addSystem(terrainSystem);
+        systemManager.addSystem(gridWorldSystem);
         systemManager.addSystem(spriteSystem);
         systemManager.addSystem(physicsSystem);
         systemManager.addSystem(animationSystem);
@@ -120,10 +246,19 @@ namespace Engine {
         // Spawn persistent Editor Camera
         Entity editorCam = registry.create();
         registry.emplace<Name>(editorCam, Name{"EditorCamera"});
-        registry.emplace<Transform>(editorCam, Transform{ glm::vec3(0.0f, 2.0f, 5.0f) });
-        registry.emplace<Camera>(editorCam, Camera{});
+        Transform editorCamTransform{ glm::vec3(0.0f, 4.0f, 10.0f) };
+        editorCamTransform.rotation.x = -15.0f; // pitch down 15 degrees towards scene
+        editorCamTransform.rotation.y = -90.0f; // yaw -90 degrees (facing along -Z into the scene)
+        Camera camComp{};
+        camComp.moveSpeed = 10.0f;
+        camComp.mouseSensitivity = 0.12f;
+        EditorCamera editorCamComp{};
+        editorCamComp.pivot = glm::vec3(0.0f, 0.0f, 0.0f);
+        editorCamComp.pivotDistance = glm::length(editorCamTransform.position - editorCamComp.pivot);
+        registry.emplace<Transform>(editorCam, std::move(editorCamTransform));
+        registry.emplace<Camera>(editorCam, std::move(camComp));
         registry.emplace<InputComponent>(editorCam, InputComponent{});
-        registry.emplace<EditorCamera>(editorCam, EditorCamera{});
+        registry.emplace<EditorCamera>(editorCam, std::move(editorCamComp));
 
         // Initialize editor UI overlay (always initialized to support ImGui Game UI rendering)
         editorUI = std::make_unique<EditorUI>(registry, *renderer, sceneManager, editorMode, config.startScenePath,
@@ -136,12 +271,14 @@ namespace Engine {
         editorUI->initialize(window);
 
         // Setup initial editor fly mode based on whether editor UI is present
+        editorMode.isEditorActive = config.enableEditor;
         if (!config.enableEditor) {
             editorMode.isPlaying = true;
             editorMode.flyMode = true;
             glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
         } else {
             editorMode.flyMode = false;
+            editorMode.flyToggled = false;
             glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
         }
 
@@ -151,12 +288,16 @@ namespace Engine {
         pluginManager->loadPlugins();
         pluginManager->loadScripts(config.projectPath);
 
+        std::cout << "[Application] Setting up sceneManager..." << std::endl;
         sceneManager.setContext(&registry, renderer.get());
         SceneManagement::setSceneManager(&sceneManager);
         sceneManager.onSceneLoadedCallback = [this](const SceneInfo& info) {
+            std::cout << "[Application] onSceneLoadedCallback fired!" << std::endl;
             systemManager.notifySceneLoadedAll();
         };
+        std::cout << "[Application] Changing scene to startScenePath: " << config.startScenePath << std::endl;
         sceneManager.changeScene(std::make_unique<DefaultScene>(registry, *renderer, config.startScenePath));
+        std::cout << "[Application] changeScene finished!" << std::endl;
 
         running = true;
 
@@ -394,9 +535,15 @@ namespace Engine {
 
         // Previously we unloaded all plugins before building, which could corrupt engine plugin state.
         // Instead, we only need to configure and build the scripts, then reload the compiled script DLLs.
-        // Run CMake config and build dynamically (Release build)
-        std::string configCmd = "cmake -S \"" + sourceDir.string() + "\" -B \"" + buildDir.string() + "\" -G \"Visual Studio 17 2022\" -A x64 -T v143 -DCMAKE_BUILD_TYPE=Release";
-        std::string buildCmd = "cmake --build \"" + buildDir.string() + "\" --config Release";
+#ifdef _DEBUG
+        std::string buildConfig = "Debug";
+#else
+        std::string buildConfig = "Release";
+#endif
+
+        // Run CMake config and build dynamically matching host configuration
+        std::string configCmd = "cmake -S \"" + sourceDir.string() + "\" -B \"" + buildDir.string() + "\" -G \"Visual Studio 17 2022\" -A x64 -T v143 -DCMAKE_BUILD_TYPE=" + buildConfig;
+        std::string buildCmd = "cmake --build \"" + buildDir.string() + "\" --config " + buildConfig;
 
         std::cout << "[BuildSystem] Configuring scripts: " << configCmd << std::endl;
         int result = std::system(configCmd.c_str());
@@ -565,7 +712,11 @@ namespace Engine {
         while (running && !renderer->shouldClose()) {
             glfwPollEvents();
 
+            // Begin frame profiling
+            Engine::Profiler::getInstance().beginFrame();
+
             if (editorMode.pendingPlay) {
+                PROFILE_SCOPE("PlayMode_SaveSnapshot");
                 editorMode.pendingPlay = false;
                 if (Scene* currentScene = sceneManager.getCurrentScene()) {
                     currentScene->saveToFile("assets/scenes/.play_temp.json");
@@ -575,9 +726,11 @@ namespace Engine {
                 glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
             }
             if (editorMode.pendingStop) {
+                PROFILE_SCOPE("PlayMode_RestoreSnapshot");
                 editorMode.pendingStop = false;
                 editorMode.isPlaying = false;
                 editorMode.flyMode = false;
+                editorMode.flyToggled = false;
                 glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
                 if (Scene* currentScene = sceneManager.getCurrentScene()) {
                     currentScene->loadFromFile("assets/scenes/.play_temp.json");
@@ -588,9 +741,6 @@ namespace Engine {
             }
 
             float dt = renderer->getDeltaTime();
-
-            // Begin frame profiling
-            Engine::Profiler::getInstance().beginFrame();
 
             // Run user update callback
             onUpdate(dt);

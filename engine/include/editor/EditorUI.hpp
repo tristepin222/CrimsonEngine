@@ -136,6 +136,14 @@ private:
      */
     void destroyDescriptorPool();
     /**
+     * @brief Saves current scene to active scene path.
+     */
+    void saveCurrentScene();
+    /**
+     * @brief Marks the scene as modified so it will be saved to disk.
+     */
+    void markSceneDirty();
+    /**
      * @brief Renders panel controls for scene operations (New/Load/Save/Spawn).
      */
     void drawSceneControls();
@@ -206,7 +214,10 @@ private:
      */
     void drawSpriteRendererInspector();
     /**
-
+     * @brief Renders the Terrain component inspector panel.
+     */
+    void drawTerrainInspector();
+    /**
      * @brief Renders custom editor inspectors for all game UI components.
      */
     void drawUIComponentsEditor();
@@ -214,6 +225,18 @@ private:
      * @brief Renders a 3D grid overlay on the tilemap for editor visual feedback.
      */
     void drawTilemapGridOverlay();
+    /**
+     * @brief Renders the 3D viewport sculpting brush overlay and handles mouse deformation.
+     */
+    void drawTerrainSculptOverlay();
+    /**
+     * @brief Renders 3D chunk boundary lines and chunk coordinate labels on terrains.
+     */
+    void drawTerrainChunkBordersOverlay();
+    /**
+     * @brief Renders the 3D grid world overlay and handles interactive cell farming/editing in viewport.
+     */
+    void drawGridWorldOverlay();
     /**
      * @brief Renders inline controls for Mesh component fields.
      */
@@ -226,6 +249,10 @@ private:
      * @brief Renders inline controls for Camera component fields.
      */
     void drawCameraEditor();
+    /**
+     * @brief Renders inline controls for Light component fields.
+     */
+    void drawLightEditor();
     /**
      * @brief Renders inline controls for Skeleton component fields.
      */
@@ -301,6 +328,10 @@ private:
      * @brief Draws physics gun debug rays when activated by the user.
      */
     void drawPhysgunDebugOverlay();
+    /**
+     * @brief Draws wireframe gizmos (frustum cone, sphere, sun rays) and billboard glyphs for light sources.
+     */
+    void drawLightGizmoOverlay();
 
     /** @brief Reference to registry. */
     Registry& registry;
@@ -318,6 +349,8 @@ private:
     bool initialized = false;
     /** @brief Target json file path for scene serialization. */
     std::string scenePath = "assets/scenes/test_scene.json";
+    /** @brief Dirty flag for triggering scene auto-save. */
+    bool m_sceneDirty = false;
     /** @brief Status info message printed on UI panel. */
     std::string statusMessage = "Scene not saved yet.";
     /** @brief Cache buffer string for renaming entities. */
@@ -342,10 +375,30 @@ private:
     bool previousToggleKeyDown = false;
     /** @brief Flag to toggle drawing collider wireframes in the viewport. */
     bool showColliders = false;
+    /** @brief Flag to toggle drawing light gizmos and icons in the viewport. */
+    bool showLightGizmos = true;
     /** @brief Whether the Build Settings panel is open. */
     bool showBuildSettings = false;
+    /** @brief Whether the Project Settings panel is open. */
+    bool showProjectSettings = false;
+    /** @brief Whether the user preferences window is open. */
+    bool showUserSettings = false;
+    /** @brief Selected editor appearance theme: 0 dark, 1 crimson, 2 light. */
+    int userTheme = 0;
+    /** @brief Renders the Project Settings dialog window. */
+    void drawProjectSettingsDialog();
+    /** @brief Renders the persisted per-user editor preferences window. */
+    void drawUserSettingsDialog();
+    /** @brief Applies the active appearance theme to ImGui. */
+    void applyUserTheme();
+    /** @brief Restores user preferences from the editor settings file. */
+    void loadUserSettings();
+    /** @brief Persists user preferences without affecting project settings. */
+    void saveUserSettings() const;
     /** @brief Whether the Profiler panel is open. */
     bool showProfilerPanel = false;
+    /** @brief Whether the diagnostics panel is visible in the default workspace. */
+    bool showDebugPanel = false;
     /** @brief Renders the in-depth Profiler window. */
     void drawProfilerPanel();
     /** @brief Output path for game builds. */
@@ -374,4 +427,16 @@ private:
     float snapRotation = 15.0f;
     /** @brief Scale grid snap step. */
     float snapScale = 0.1f;
+
+    enum class GridPlacementTool {
+        None = 0,
+        Place = 1,     // Mark cell/footprint as occupied (building/object placement)
+        Block = 2,     // Mark cell/footprint as blocked obstacle
+        Clear = 3      // Clear cell/footprint occupancy and blocked flags
+    };
+
+    /** @brief Active placement tool mode for GridWorld. */
+    GridPlacementTool gridPlacementTool = GridPlacementTool::Place;
+    /** @brief Footprint size in grid cells (e.g. 1x1, 2x2, 3x3). */
+    glm::ivec2 gridFootprintSize{ 1, 1 };
 };
