@@ -1,6 +1,6 @@
 # Custom Entity-Component System (ECS)
 
-This document provides a technical deep-dive into the engine's custom, header-only Entity-Component System (ECS). The ECS is designed from scratch to prioritize cache locality, fast component lookups, generational entity recycling, and compile-time template queries.
+This document provides a technical deep-dive into the engine's custom, header-only Entity-Component System (ECS). The ECS is designed from scratch to prioritize cache locality, fast component lookups, generational entity recycling, compile-time template queries, and deep entity cloning.
 
 ![ECS Structure](diagrams/out/ecs_structure/ECSStructure.png)
 
@@ -45,6 +45,26 @@ This keeps data perfectly aligned, contiguous, and packed tight in RAM, ensuring
 
 ---
 
+## Deep Entity Cloning (`EntityCloner`)
+
+Duplicating entities with complex hierarchies, multiple components, and GPU resources is handled by [`EntityCloner.hpp`](../engine/include/ecs/EntityCloner.hpp):
+
+```cpp
+namespace EntityCloner {
+    Entity clone(Registry& registry, VulkanRenderer& renderer, Entity source);
+}
+```
+
+### Cloning Protocol
+1. **Entity Allocation**: Instantiates a fresh entity identifier from `registry.create()`.
+2. **Component Introspection**: Iterates through all registered component types registered in `ComponentReflectionRegistry`.
+3. **Data Duplication**: For each component present on the source entity, allocates an equivalent component on the clone entity and performs deep field copies.
+4. **Name Formatting**: Automatically increments names (e.g. `"Guard"` becomes `"Guard (Clone)"`).
+5. **GPU Asset Binding**: Safely references shared mesh/texture descriptor sets without triggering redundant VRAM allocations.
+6. **Hierarchy Cloning**: Duplicates child hierarchies attached via `HierarchyComponent`, remapping parent/child references to the newly cloned entities.
+
+---
+
 ## Event Subscriptions
 
 The [Registry](../engine/include/ecs/Registry.hpp) allows systems to subscribe to events when components are added or removed:
@@ -52,7 +72,7 @@ The [Registry](../engine/include/ecs/Registry.hpp) allows systems to subscribe t
 using ComponentAddedCallback = std::function<void(Entity)>;
 using ComponentRemovedCallback = std::function<void(Entity)>;
 ```
-This is heavily utilized in [RenderSystem.hpp](../engine/include/ecs/systems/RenderSystem.hpp) to automatically manage the rendering queues. When a `Mesh`, `Transform`, or `Material` component is added to an entity, the system caches it. When any of these components are removed, the entity is evicted from the renderer cache:
+This is heavily utilized in [RenderSystem.hpp](../engine/include/ecs/systems/RenderSystem.hpp) to automatically manage rendering queues:
 ```cpp
 registry.subscribeToAdded<Mesh>([this](Entity e) { checkAndAdd(e); });
 registry.subscribeToRemoved<Mesh>([this](Entity e) { removeEntity(e); });
@@ -142,8 +162,6 @@ Structure of Arrays (SoA) - Cache Friendly:
 
 ## Example Usage Code (Registry & Views)
 
-Below is an example showing how to create entities, attach components, and query them using views:
-
 ```cpp
 // 1. Create Registry
 Registry registry;
@@ -162,5 +180,7 @@ for (auto [entity, transform, mesh] : registry.view<Transform, Mesh>()) {
     // and operates directly on contiguous CPU memory pools.
     transform.position.y += 1.0f * dt;
 }
-```
 
+// 5. Deep clone player entity
+Entity cloneEntity = EntityCloner::clone(registry, renderer, player);
+```
