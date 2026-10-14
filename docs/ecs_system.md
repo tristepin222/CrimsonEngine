@@ -71,10 +71,17 @@ ecb.removeComponent<Velocity>(stoppedEntity);
 ecb.execute(registry);
 ```
 
-### Concurrency Guarantees
-* **Internal Synchronization**: All recording methods (`destroyEntity`, `addComponent`, `removeComponent`, `setActive`, `clear`) are guarded by an internal `std::mutex`.
-* **Multi-Thread Recording**: Multiple worker threads and parallel systems can safely record commands into the same command buffer without data races.
-* **Atomic Playback**: `execute(registry)` moves the pending command vector out under the lock before executing, allowing new commands to be buffered concurrently if needed.
+### Critical Concurrency Distinction: Recording vs. Direct Mutation
+* **Thread-Safe Command Recording**: `EntityCommandBuffer` contains an internal `std::mutex` guarding all command recording operations (`destroyEntity`, `addComponent`, `removeComponent`, `setActive`, `clear`). Any number of concurrent worker threads, jobs, or parallel-safe systems can record commands simultaneously into a shared command buffer without race conditions.
+* **Non-Thread-Safe ECS Core**: The command buffer's internal mutex **only** protects its internal recording queue. It does **not** make direct calls to `Registry::create()`, `destroy()`, `emplace()`, `ComponentStorage`, or views thread-safe. Direct ECS mutations and playback (`ecb.execute(registry)`) MUST be performed sequentially on the main thread during designated stage transition sync points (e.g., between `PostUpdate` and `Render`).
+
+### Command Buffer Playback Failure Policy
+In earlier iterations, if a command threw an exception during sequential playback, stack unwinding destroyed the local pending command vector, silently discarding every subsequent command in the batch.
+
+The production-ready command buffer enforces a **non-discarding, exception-safe playback policy**:
+1. **Never Discard Subsequent Commands**: `ecb.execute(Registry& reg, bool throwOnError = false, std::vector<std::exception_ptr>* outErrors = nullptr)` catches exceptions per command. If an invalid or stale entity handle causes a command to fail (e.g., attempting to emplace onto a recycled entity), the error is logged or recorded, and playback immediately continues for all remaining commands in the queue.
+2. **Optional Error Collection & Rethrowing**: Callers can inspect `outErrors` to diagnose which operations failed, or set `throwOnError = true` to rethrow the first encountered exception after all valid commands have completed.
+3. **Queue Invariant**: `execute()` drains the command buffer under the recording lock so newly submitted commands during playback are never lost.
 
 ---
 

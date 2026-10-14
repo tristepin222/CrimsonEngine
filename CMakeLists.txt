@@ -86,6 +86,9 @@ set(TRACY_ENABLE ON CACHE BOOL "Enable Tracy Profiler" FORCE)
 set(TRACY_ON_DEMAND ON CACHE BOOL "On-demand Tracy profiling" FORCE)
 FetchContent_MakeAvailable(tracy)
 
+# --- Enable Testing ---
+enable_testing()
+
 # --- Add Subdirectories ---
 # sandbox_game is now a standalone project — build it with build_game.bat
 add_subdirectory(engine)

@@ -65,6 +65,18 @@ std::atomic<size_t> dequeuePos{0};
 4. Move the job out of the cell, then reset `sequence` to `dequeuePos + bufferMask + 1` with release semantics.
 5. Execute the job outside of any critical section.
 
+### Configurable Queue Capacity & Backpressure
+The bounded circular buffer capacity is configurable at runtime via `initialize(threadCount, queueCapacity)` (defaulting to 65,536 cells, rounded up to the nearest power of two, minimum 64):
+
+```cpp
+// Initialize with custom queue capacity (e.g. for resource-constrained environments or testing)
+jobSystem.initialize(4, 1024);
+```
+
+#### Distinguishing Batch Throughput from Queue Saturation
+* **Batch Throughput**: Represents the rate at which the system processes high volumes of jobs over time (e.g., dispatching 8,000 or 100,000 tasks in batches). Because consumers concurrently drain cells while producers enqueue, the queue never necessarily fills up if throughput keeps pace.
+* **Queue Saturation & Producer Backpressure**: Occurs when in-flight jobs reach the physical capacity limit of the ring buffer (e.g., fast concurrent producers outpacing workers). When saturated (`diff < 0`), producers enter a low-overhead hardware spin-pause loop (`_mm_pause()` or `__yield()`) followed by `std::this_thread::yield()`. This provides smooth, lock-free backpressure without packet dropping, heap allocation bursts, or deadlock.
+
 ---
 
 ## 3. Job Handles, Cooperative Waiting & Exception Safety
@@ -200,7 +212,13 @@ wait(handle);
 1. **Load Balancing**: Faster cores automatically claim more chunks via `fetch_add(chunkSize)`.
 2. **Minimal Bus Contention**: Workers make $\frac{N}{\text{chunkSize}}$ atomic operations instead of $N$.
 3. **Zero Deadlock Risk**: Coordinated by the cooperative `wait()` loop.
-4. **Exception-Safe**: Exceptions inside `func(i)` are safely captured and rethrown on the calling thread.
+4. **Exception-Safe Accounting**: Exceptions inside `func(i)` do not skip completion decrements.
+
+### Explicit Exception Semantics: Non-Transactional Partial Execution
+When an iteration throws an exception within `parallelFor()`:
+* **Asynchronous Execution**: Other worker threads may continue running their assigned chunks while the failing thread records the exception into the `JobCounter` and terminates its loop.
+* **Non-Transactional Side Effects**: `parallelFor()` is **not transactional**. Any state mutations performed by iterations preceding the failure or running concurrently on other workers have already taken effect in memory.
+* **No Blind Retries**: When `wait(handle)` finishes and rethrows the captured exception to the caller, the caller must recognize that execution was **partial**. Blindly retrying the full range `[0, count)` without reconciling partially modified data may result in duplicated side effects or corruption.
 
 ---
 

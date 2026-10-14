@@ -1,5 +1,4 @@
 #include <iostream>
-#include <cassert>
 #include <string>
 #include <vector>
 #include <atomic>
@@ -12,6 +11,16 @@
 #include "ecs/EntityManager.hpp"
 #include "ecs/ComponentStorage.hpp"
 #include "core/JobSystem.hpp"
+
+// Non-stripping test assertion macro that works reliably in Release (NDEBUG) builds
+#define TEST_ASSERT(cond, msg) \
+    do { \
+        if (!(cond)) { \
+            std::cerr << "[ASSERTION FAILED] " << __FILE__ << ":" << __LINE__ \
+                      << " in " << __func__ << "(): " << #cond << " -> " << (msg) << std::endl; \
+            throw std::runtime_error(std::string("Assertion failed: ") + #cond + " - " + (msg)); \
+        } \
+    } while (false)
 
 // Test components
 struct TestComponent {
@@ -35,32 +44,32 @@ void testECSGenerationalSafety() {
     uint32_t originalId = entityA.getId();
     registry.emplace<TestComponent>(entityA, TestComponent{42, "EntityA"});
 
-    assert(registry.has<TestComponent>(entityA));
-    assert(registry.get<TestComponent>(entityA)->value == 42);
-    assert(registry.getRef<TestComponent>(entityA).value == 42);
+    TEST_ASSERT(registry.has<TestComponent>(entityA), "EntityA should have TestComponent");
+    TEST_ASSERT(registry.get<TestComponent>(entityA) != nullptr && registry.get<TestComponent>(entityA)->value == 42, "EntityA component value should be 42");
+    TEST_ASSERT(registry.getRef<TestComponent>(entityA).value == 42, "EntityA getRef value should be 42");
 
     // 2. Destroy Entity A
     registry.destroy(entityA);
-    assert(!registry.isValid(entityA));
+    TEST_ASSERT(!registry.isValid(entityA), "EntityA should be invalid after destroy");
 
     // 3. Create Entity B (recycles ID 0 with Gen 1)
     Entity entityB = registry.create();
-    assert(entityB.getId() == originalId);
-    assert(entityB.getGeneration() != entityA.getGeneration());
-    assert(entityB != entityA);
+    TEST_ASSERT(entityB.getId() == originalId, "EntityB should recycle EntityA's numeric ID");
+    TEST_ASSERT(entityB.getGeneration() != entityA.getGeneration(), "EntityB generation must differ from EntityA");
+    TEST_ASSERT(entityB != entityA, "EntityB handle must not equal EntityA handle");
 
     // Emplace component on entity B
     registry.emplace<TestComponent>(entityB, TestComponent{99, "EntityB"});
-    assert(registry.has<TestComponent>(entityB));
-    assert(registry.get<TestComponent>(entityB)->value == 99);
+    TEST_ASSERT(registry.has<TestComponent>(entityB), "EntityB should have TestComponent");
+    TEST_ASSERT(registry.get<TestComponent>(entityB) != nullptr && registry.get<TestComponent>(entityB)->value == 99, "EntityB component value should be 99");
 
     // 4. Stale handle A regression checks:
     // a) has() on stale handle must be false
-    assert(!registry.has<TestComponent>(entityA));
+    TEST_ASSERT(!registry.has<TestComponent>(entityA), "has() on stale handle must return false");
 
     // b) get() and tryGet() on stale handle must return nullptr
-    assert(registry.get<TestComponent>(entityA) == nullptr);
-    assert(registry.tryGet<TestComponent>(entityA) == nullptr);
+    TEST_ASSERT(registry.get<TestComponent>(entityA) == nullptr, "get() on stale handle must return nullptr");
+    TEST_ASSERT(registry.tryGet<TestComponent>(entityA) == nullptr, "tryGet() on stale handle must return nullptr");
 
     // c) getRef() on stale handle must throw
     bool threwOnGetRef = false;
@@ -69,7 +78,7 @@ void testECSGenerationalSafety() {
     } catch (const std::runtime_error&) {
         threwOnGetRef = true;
     }
-    assert(threwOnGetRef);
+    TEST_ASSERT(threwOnGetRef, "getRef() on stale handle must throw std::runtime_error");
 
     // d) emplace() on stale handle must throw and MUST NOT overwrite B's data
     bool threwOnEmplace = false;
@@ -78,9 +87,9 @@ void testECSGenerationalSafety() {
     } catch (const std::runtime_error&) {
         threwOnEmplace = true;
     }
-    assert(threwOnEmplace);
-    assert(registry.get<TestComponent>(entityB)->value == 99);
-    assert(registry.get<TestComponent>(entityB)->name == "EntityB");
+    TEST_ASSERT(threwOnEmplace, "emplace() on stale handle must throw std::runtime_error");
+    TEST_ASSERT(registry.get<TestComponent>(entityB)->value == 99, "Stale emplace must not overwrite EntityB's value");
+    TEST_ASSERT(registry.get<TestComponent>(entityB)->name == "EntityB", "Stale emplace must not overwrite EntityB's name");
 
     // e) emplace_or_replace() on stale handle must throw
     bool threwOnEmplaceOrReplace = false;
@@ -89,13 +98,13 @@ void testECSGenerationalSafety() {
     } catch (const std::runtime_error&) {
         threwOnEmplaceOrReplace = true;
     }
-    assert(threwOnEmplaceOrReplace);
-    assert(registry.get<TestComponent>(entityB)->value == 99);
+    TEST_ASSERT(threwOnEmplaceOrReplace, "emplace_or_replace() on stale handle must throw std::runtime_error");
+    TEST_ASSERT(registry.get<TestComponent>(entityB)->value == 99, "Stale emplace_or_replace must not mutate EntityB");
 
     // f) remove() on stale handle must NOT remove B's component
     registry.remove<TestComponent>(entityA);
-    assert(registry.has<TestComponent>(entityB));
-    assert(registry.get<TestComponent>(entityB)->value == 99);
+    TEST_ASSERT(registry.has<TestComponent>(entityB), "remove() on stale handle must not remove EntityB's component");
+    TEST_ASSERT(registry.get<TestComponent>(entityB)->value == 99, "EntityB value must remain unchanged after stale remove");
 
     // g) getMask() on stale handle must throw; tryGetMask() must return nullptr
     bool threwOnGetMask = false;
@@ -104,15 +113,15 @@ void testECSGenerationalSafety() {
     } catch (const std::runtime_error&) {
         threwOnGetMask = true;
     }
-    assert(threwOnGetMask);
-    assert(registry.tryGetMask(entityA) == nullptr);
+    TEST_ASSERT(threwOnGetMask, "getMask() on stale handle must throw std::runtime_error");
+    TEST_ASSERT(registry.tryGetMask(entityA) == nullptr, "tryGetMask() on stale handle must return nullptr");
 
     // h) Direct ComponentStorage tests with stale handle
     ComponentStorage<TestComponent> storage;
     storage.add(entityB, TestComponent{123, "StorageB"});
-    assert(storage.has(entityB));
-    assert(!storage.has(entityA));
-    assert(storage.tryGet(entityA) == nullptr);
+    TEST_ASSERT(storage.has(entityB), "Storage must have EntityB");
+    TEST_ASSERT(!storage.has(entityA), "Storage must not have stale EntityA");
+    TEST_ASSERT(storage.tryGet(entityA) == nullptr, "storage.tryGet(entityA) must be nullptr");
 
     bool threwStorageGet = false;
     try {
@@ -120,7 +129,7 @@ void testECSGenerationalSafety() {
     } catch (const std::runtime_error&) {
         threwStorageGet = true;
     }
-    assert(threwStorageGet);
+    TEST_ASSERT(threwStorageGet, "storage.get(stale handle) must throw");
 
     bool threwStorageAdd = false;
     try {
@@ -128,13 +137,13 @@ void testECSGenerationalSafety() {
     } catch (const std::runtime_error&) {
         threwStorageAdd = true;
     }
-    assert(threwStorageAdd);
-    assert(storage.get(entityB).value == 123);
+    TEST_ASSERT(threwStorageAdd, "storage.add(stale handle) must throw");
+    TEST_ASSERT(storage.get(entityB).value == 123, "EntityB storage value preserved");
 
     // remove on stale handle must not remove B
     storage.remove(entityA);
-    assert(storage.has(entityB));
-    assert(storage.get(entityB).value == 123);
+    TEST_ASSERT(storage.has(entityB), "storage.remove(stale) must not remove EntityB");
+    TEST_ASSERT(storage.get(entityB).value == 123, "storage value intact after stale remove");
 
     std::cout << "[Test 1] PASSED: Generational handles are strictly enforced at all access points." << std::endl;
 }
@@ -162,14 +171,14 @@ void testJobSystemExceptionSafety() {
         std::cout << "  -> Caught unknown exception from parallelFor" << std::endl;
     }
 
-    assert(caughtException);
+    TEST_ASSERT(caughtException, "parallelFor must propagate exception when a worker task throws");
 
     // Verify subsequent jobs run normally and the job system is not hung or broken
     std::atomic<int> counter{0};
     js.parallelFor(50, [&counter](int /*i*/) {
         counter.fetch_add(1, std::memory_order_relaxed);
     });
-    assert(counter.load() == 50);
+    TEST_ASSERT(counter.load() == 50, "Subsequent parallelFor must complete all 50 iterations successfully");
 
     std::cout << "[Test 2] PASSED: parallelFor completes and rethrows on exception without hanging." << std::endl;
 }
@@ -196,16 +205,16 @@ void testNestedWaits() {
     });
 
     js.wait(parentJob);
-    assert(nestedCounter.load() == 10);
+    TEST_ASSERT(nestedCounter.load() == 10, "All 10 nested child jobs must complete");
 
     std::cout << "[Test 3] PASSED: Cooperative nested wait succeeded without deadlock." << std::endl;
 }
 
 // --------------------------------------------------------------------------
-// 4. Queue Saturation Stress Test
+// 4. High-Volume Batch Throughput Test (8,000 tasks)
 // --------------------------------------------------------------------------
-void testQueueSaturation() {
-    std::cout << "[Test 4] Running Queue Saturation Stress Test (8,000 tasks)..." << std::endl;
+void testHighVolumeBatchThroughput() {
+    std::cout << "[Test 4] Running High-Volume Batch Throughput Test (8,000 tasks)..." << std::endl;
     auto& js = Engine::JobSystem::getInstance();
 
     constexpr int TOTAL_JOBS = 8000;
@@ -222,20 +231,82 @@ void testQueueSaturation() {
     auto handle = js.pushJobs(batch);
     js.wait(handle);
 
-    assert(completed.load() == TOTAL_JOBS);
-    std::cout << "[Test 4] PASSED: 8,000 jobs completed with ring-buffer saturation handling." << std::endl;
+    TEST_ASSERT(completed.load() == TOTAL_JOBS, "All 8,000 batch jobs must complete");
+    std::cout << "[Test 4] PASSED: 8,000 jobs completed successfully through batch dispatcher." << std::endl;
 }
 
 // --------------------------------------------------------------------------
-// 5. Job System Shutdown and Restart
+// 5. Genuine Queue Saturation and Backpressure Test
+// --------------------------------------------------------------------------
+void testQueueSaturationAndBackpressure() {
+    std::cout << "[Test 5] Running Genuine Queue Saturation & Backpressure Test..." << std::endl;
+    auto& js = Engine::JobSystem::getInstance();
+
+    // Re-initialize JobSystem with a deliberately small queue capacity (128 cells) and 2 workers
+    js.shutdown();
+    constexpr size_t SMALL_CAPACITY = 128;
+    js.initialize(2, SMALL_CAPACITY);
+    TEST_ASSERT(js.getQueueCapacity() == SMALL_CAPACITY, "Queue capacity should be exactly 128");
+
+    // Spawn 4 concurrent producer threads each pushing 512 jobs (total 2048 jobs, 16x queue capacity)
+    // This exercises the `diff < 0` backpressure spin-yield loop on full ring buffer
+    constexpr int PRODUCERS = 4;
+    constexpr int JOBS_PER_PRODUCER = 512;
+    constexpr int TOTAL_JOBS = PRODUCERS * JOBS_PER_PRODUCER;
+
+    std::atomic<int> completedCount{0};
+    std::atomic<bool> startSignal{false};
+    std::vector<std::thread> producers;
+    producers.reserve(PRODUCERS);
+
+    for (int p = 0; p < PRODUCERS; ++p) {
+        producers.emplace_back([&js, &completedCount, &startSignal]() {
+            while (!startSignal.load(std::memory_order_acquire)) {
+                std::this_thread::yield();
+            }
+            for (int i = 0; i < JOBS_PER_PRODUCER; ++i) {
+                js.pushJob([&completedCount]() {
+                    completedCount.fetch_add(1, std::memory_order_relaxed);
+                });
+            }
+        });
+    }
+
+    // Release producers concurrently
+    startSignal.store(true, std::memory_order_release);
+
+    for (auto& t : producers) {
+        t.join();
+    }
+
+    // Wait until all submitted jobs have finished
+    auto startTime = std::chrono::steady_clock::now();
+    while (completedCount.load(std::memory_order_acquire) < TOTAL_JOBS) {
+        js.tryExecuteOneJob();
+        auto elapsed = std::chrono::steady_clock::now() - startTime;
+        if (std::chrono::duration_cast<std::chrono::seconds>(elapsed).count() > 10) {
+            TEST_ASSERT(false, "Timeout waiting for saturated queue jobs to finish!");
+        }
+    }
+
+    TEST_ASSERT(completedCount.load() == TOTAL_JOBS, "All 2,048 jobs submitted under heavy queue backpressure must complete");
+    std::cout << "[Test 5] PASSED: Bounded MPMC queue successfully sustained full saturation and backpressure across concurrent producers." << std::endl;
+
+    // Restore standard scheduler configuration for subsequent tests
+    js.shutdown();
+    js.initialize();
+}
+
+// --------------------------------------------------------------------------
+// 6. Job System Shutdown and Restart
 // --------------------------------------------------------------------------
 void testShutdownAndRestart() {
-    std::cout << "[Test 5] Running Job System Shutdown and Restart Test..." << std::endl;
+    std::cout << "[Test 6] Running Job System Shutdown and Restart Test..." << std::endl;
     auto& js = Engine::JobSystem::getInstance();
 
     js.shutdown();
 
-    // Re-initialize and verify execution
+    // Re-initialize with 4 workers and verify execution
     js.initialize(4);
     std::atomic<int> sum{0};
     js.parallelFor(200, [&sum](int i) {
@@ -243,21 +314,18 @@ void testShutdownAndRestart() {
     });
 
     int expected = (199 * 200) / 2;
-    assert(sum.load() == expected);
+    TEST_ASSERT(sum.load() == expected, "Sum calculated via parallelFor after restart must match arithmetic series sum");
 
-    std::cout << "[Test 5] PASSED: Shutdown and re-initialization functioned cleanly." << std::endl;
+    std::cout << "[Test 6] PASSED: Shutdown and re-initialization functioned cleanly." << std::endl;
 }
 
 // --------------------------------------------------------------------------
-// 6. Thread-Safe EntityCommandBuffer Concurrency Test
+// 7. Thread-Safe EntityCommandBuffer Concurrency Test
 // --------------------------------------------------------------------------
 void testEntityCommandBufferConcurrency() {
-    std::cout << "[Test 6] Running Concurrent EntityCommandBuffer Test..." << std::endl;
-    std::cout << "  -> Step A: instantiating Registry..." << std::endl;
+    std::cout << "[Test 7] Running Concurrent EntityCommandBuffer Recording Test..." << std::endl;
     Registry registry;
-    std::cout << "  -> Step B: instantiating EntityCommandBuffer..." << std::endl;
     EntityCommandBuffer ecb;
-    std::cout << "  -> Step C: creating test entities..." << std::endl;
 
     std::vector<Entity> testEntities;
     for (int i = 0; i < 200; ++i) {
@@ -267,7 +335,6 @@ void testEntityCommandBufferConcurrency() {
     // Spawn 8 threads concurrently recording commands into the same buffer
     std::vector<std::thread> threads;
     constexpr int THREADS = 8;
-    std::cout << "  -> Entities created, spawning threads..." << std::endl;
     for (int t = 0; t < THREADS; ++t) {
         threads.emplace_back([t, &ecb, &testEntities]() {
             for (int i = 0; i < 25; ++i) {
@@ -281,21 +348,78 @@ void testEntityCommandBufferConcurrency() {
     for (auto& th : threads) {
         th.join();
     }
-    std::cout << "  -> Threads joined. ecb.size() = " << ecb.size() << std::endl;
 
-    assert(ecb.size() == 400); // 200 addComponent + 200 setActive
-    std::cout << "  -> Executing ecb..." << std::endl;
+    TEST_ASSERT(ecb.size() == 400, "ECB should have exactly 400 recorded commands (200 adds + 200 setActives)");
     ecb.execute(registry);
-    std::cout << "  -> ecb executed. Verifying..." << std::endl;
-    assert(ecb.empty());
+    TEST_ASSERT(ecb.empty(), "ECB should be empty after execute");
 
     // Verify all components were properly attached
     for (int i = 0; i < 200; ++i) {
         Entity e = testEntities[i];
-        assert(registry.has<TestComponent>(e));
+        TEST_ASSERT(registry.has<TestComponent>(e), "Entity must possess TestComponent after ECB playback");
     }
 
-    std::cout << "[Test 6] PASSED: EntityCommandBuffer concurrent recording and playback succeeded." << std::endl;
+    std::cout << "[Test 7] PASSED: Thread-safe ECB recording from multiple threads played back deterministically." << std::endl;
+}
+
+// --------------------------------------------------------------------------
+// 8. EntityCommandBuffer Exception Safety & Non-Discarding Playback Test
+// --------------------------------------------------------------------------
+void testEntityCommandBufferExceptionSafety() {
+    std::cout << "[Test 8] Running EntityCommandBuffer Playback Exception Safety Test..." << std::endl;
+    Registry registry;
+    EntityCommandBuffer ecb;
+
+    // Create 3 entities: A, B, C
+    Entity entityA = registry.create();
+    Entity entityB = registry.create();
+    Entity entityC = registry.create();
+
+    // Destroy Entity B so its handle becomes stale
+    registry.destroy(entityB);
+    TEST_ASSERT(!registry.isValid(entityB), "EntityB should be invalid/stale");
+
+    // Record 3 deferred commands:
+    // 1. Add TestComponent to valid Entity A
+    // 2. Add TestComponent to STALE Entity B (which will throw due to generational safety)
+    // 3. Add TestComponent to valid Entity C
+    ecb.addComponent<TestComponent>(entityA, TestComponent{111, "ValidA"});
+    ecb.addComponent<TestComponent>(entityB, TestComponent{222, "StaleB"});
+    ecb.addComponent<TestComponent>(entityC, TestComponent{333, "ValidC"});
+
+    TEST_ASSERT(ecb.size() == 3, "ECB should have 3 pending commands");
+
+    // Execute with throwOnError = false and collect errors into vector
+    std::vector<std::exception_ptr> collectedErrors;
+    size_t successCount = ecb.execute(registry, false, &collectedErrors);
+
+    // Verify non-discarding policy:
+    // - Command 1 (Entity A) executed successfully
+    // - Command 2 (Entity B) threw and was captured in collectedErrors
+    // - Command 3 (Entity C) executed successfully (NOT discarded despite command 2's failure!)
+    TEST_ASSERT(successCount == 2, "Exactly 2 valid commands should have succeeded");
+    TEST_ASSERT(collectedErrors.size() == 1, "Exactly 1 exception should have been collected for stale handle");
+    TEST_ASSERT(ecb.empty(), "ECB pending commands buffer should be cleared after playback");
+
+    TEST_ASSERT(registry.has<TestComponent>(entityA), "Entity A must have received its component");
+    TEST_ASSERT(registry.get<TestComponent>(entityA)->value == 111, "Entity A value should be 111");
+
+    TEST_ASSERT(!registry.has<TestComponent>(entityB), "Stale Entity B must not have any components");
+
+    TEST_ASSERT(registry.has<TestComponent>(entityC), "Entity C must have received its component despite prior failure");
+    TEST_ASSERT(registry.get<TestComponent>(entityC)->value == 333, "Entity C value should be 333");
+
+    // Now test throwOnError = true behavior
+    ecb.addComponent<TestComponent>(entityB, TestComponent{999, "ThrowOnStale"});
+    bool threwOnPlayback = false;
+    try {
+        ecb.execute(registry, true);
+    } catch (const std::runtime_error& e) {
+        threwOnPlayback = true;
+    }
+    TEST_ASSERT(threwOnPlayback, "ecb.execute(reg, true) must rethrow when a command encounters an error");
+
+    std::cout << "[Test 8] PASSED: EntityCommandBuffer playback does not discard subsequent commands on error." << std::endl;
 }
 
 // --------------------------------------------------------------------------
@@ -310,9 +434,11 @@ int main() {
         testECSGenerationalSafety();
         testJobSystemExceptionSafety();
         testNestedWaits();
-        testQueueSaturation();
+        testHighVolumeBatchThroughput();
+        testQueueSaturationAndBackpressure();
         testShutdownAndRestart();
         testEntityCommandBufferConcurrency();
+        testEntityCommandBufferExceptionSafety();
     } catch (const std::exception& e) {
         std::cerr << "[TEST SUITE FAILED] Unhandled exception: " << e.what() << std::endl;
         return 1;
@@ -322,7 +448,7 @@ int main() {
     }
 
     std::cout << "======================================================" << std::endl;
-    std::cout << "           ALL 6 TEST SUITES PASSED!                  " << std::endl;
+    std::cout << "           ALL 8 TEST SUITES PASSED!                  " << std::endl;
     std::cout << "======================================================" << std::endl;
     return 0;
 }

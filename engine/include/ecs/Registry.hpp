@@ -9,6 +9,7 @@
 #include <array>
 #include <memory>
 #include <mutex>
+#include <iostream>
 
 #include "core/EngineAPI.hpp"
 #include "profiler/Profiler.hpp"
@@ -48,10 +49,14 @@ public:
     void setActive(Entity e, bool active);
 
     /**
-     * @brief Plays back all recorded commands against the target registry and clears the buffer.
+     * @brief Plays back all recorded commands against the target registry.
+     * Guarantees all recorded commands are evaluated without discarding subsequent commands if an earlier one throws.
      * @param reg Target registry.
+     * @param throwOnError If true, rethrows the first captured error after completing all commands.
+     * @param outErrors Optional vector pointer to collect any captured exceptions.
+     * @return Number of successfully executed commands.
      */
-    void execute(Registry& reg);
+    size_t execute(Registry& reg, bool throwOnError = false, std::vector<std::exception_ptr>* outErrors = nullptr);
 
     /**
      * @brief Clears pending commands without executing.
@@ -452,9 +457,12 @@ public:
 
     /**
      * @brief Flushes deferred commands against this registry.
+     * @param throwOnError If true, rethrows first exception encountered after evaluating all commands.
+     * @param outErrors Optional output vector collecting captured errors.
+     * @return Number of successfully executed commands.
      */
-    void flushCommandBuffer() {
-        m_commandBuffer.execute(*this);
+    size_t flushCommandBuffer(bool throwOnError = false, std::vector<std::exception_ptr>* outErrors = nullptr) {
+        return m_commandBuffer.execute(*this, throwOnError, outErrors);
     }
 
     /**
@@ -726,16 +734,45 @@ inline void EntityCommandBuffer::setActive(Entity e, bool active) {
     });
 }
 
-inline void EntityCommandBuffer::execute(Registry& reg) {
+inline size_t EntityCommandBuffer::execute(Registry& reg, bool throwOnError, std::vector<std::exception_ptr>* outErrors) {
     std::vector<std::function<void(Registry&)>> cmds;
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         cmds = std::move(commands);
         commands.clear();
     }
+
+    size_t successCount = 0;
+    std::exception_ptr firstError = nullptr;
+
     for (auto& cmd : cmds) {
-        cmd(reg);
+        try {
+            cmd(reg);
+            ++successCount;
+        } catch (...) {
+            std::exception_ptr eptr = std::current_exception();
+            if (!firstError) {
+                firstError = eptr;
+            }
+            if (outErrors) {
+                outErrors->push_back(eptr);
+            } else {
+                try {
+                    std::rethrow_exception(eptr);
+                } catch (const std::exception& e) {
+                    std::cerr << "[EntityCommandBuffer] Command execution warning: " << e.what() << std::endl;
+                } catch (...) {
+                    std::cerr << "[EntityCommandBuffer] Command execution warning: unknown exception." << std::endl;
+                }
+            }
+        }
     }
+
+    if (throwOnError && firstError) {
+        std::rethrow_exception(firstError);
+    }
+
+    return successCount;
 }
 
 

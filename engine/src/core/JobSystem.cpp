@@ -44,7 +44,7 @@
 
 namespace Engine {
 
-    void JobSystem::initialize(unsigned int threadCount) {
+    void JobSystem::initialize(unsigned int threadCount, size_t queueCapacity) {
         if (initialized.load(std::memory_order_acquire)) return;
 
         if (threadCount == 0) {
@@ -53,8 +53,12 @@ namespace Engine {
             threadCount = hw > 1 ? hw - 1 : 1;
         }
 
-        // Initialize Dmitriy Vyukov's MPMC bounded queue
-        const size_t bufferSize = 65536; // Must be a power of two
+        // Initialize Dmitriy Vyukov's MPMC bounded queue (must be power of two, min 64)
+        size_t bufferSize = 64;
+        while (bufferSize < queueCapacity) {
+            bufferSize <<= 1;
+        }
+
         buffer = std::make_unique<Cell[]>(bufferSize);
         bufferMask = bufferSize - 1;
         for (size_t i = 0; i < bufferSize; ++i) {
@@ -70,7 +74,8 @@ namespace Engine {
         }
 
         initialized.store(true, std::memory_order_release);
-        std::cout << "[JobSystem] Lock-free pre-allocated JobSystem initialized with " << threadCount << " worker threads." << std::endl;
+        std::cout << "[JobSystem] Lock-free pre-allocated JobSystem initialized with " << threadCount
+                  << " worker threads (Queue capacity: " << bufferSize << ")." << std::endl;
     }
 
     void JobSystem::shutdown() {

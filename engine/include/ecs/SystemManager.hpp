@@ -133,11 +133,19 @@ public:
 
     /**
      * @brief Flushes deferred commands against the given registry.
+     * Evaluates commands in both SystemManager and Registry command buffers.
+     * @param registry Target registry.
+     * @param throwOnError If true, rethrows first exception encountered after evaluating all commands.
+     * @param outErrors Optional output vector collecting captured errors.
+     * @return Total count of successfully executed commands.
      */
-    void flushCommandBuffer(Registry& registry) {
+    size_t flushCommandBuffer(Registry& registry, bool throwOnError = false, std::vector<std::exception_ptr>* outErrors = nullptr) {
+        size_t count = 0;
         if (!commandBuffer.empty()) {
-            commandBuffer.execute(registry);
+            count += commandBuffer.execute(registry, throwOnError, outErrors);
         }
+        count += registry.flushCommandBuffer(throwOnError, outErrors);
+        return count;
     }
 
     /**

@@ -53,10 +53,11 @@ namespace Engine {
         }
 
         /**
-         * @brief Spawns worker threads.
+         * @brief Spawns worker threads and allocates lock-free ring-buffer queue.
          * @param threadCount Number of worker threads. Defaults to std::thread::hardware_concurrency() - 1.
+         * @param queueCapacity Capacity of the bounded MPMC queue. Will be rounded up to the nearest power of 2 (min 64).
          */
-        void initialize(unsigned int threadCount = 0);
+        void initialize(unsigned int threadCount = 0, size_t queueCapacity = 65536);
 
         /**
          * @brief Shuts down all worker threads and waits for them to join.
@@ -79,6 +80,7 @@ namespace Engine {
 
         /**
          * @brief Waits for a job handle to complete, cooperatively executing queued jobs on the calling thread.
+         * If an exception was thrown in any task belonging to this handle, it is rethrown to the caller.
          * @param handle The JobHandle to wait on.
          */
         void wait(const JobHandle& handle);
@@ -92,6 +94,14 @@ namespace Engine {
 
         /**
          * @brief Splits a total loop count into chunks and evaluates them in parallel across worker threads.
+         * 
+         * @note Exception Semantics & Partial Execution:
+         * parallelFor executes chunks concurrently across worker threads. If one or more iterations throw
+         * an exception, the first captured exception will be rethrown to the caller upon completion in wait().
+         * Execution is NON-TRANSACTIONAL and PARTIAL: iterations executed before or concurrently with the failure
+         * will have completed their side-effects, while subsequent iterations may not run.
+         * Callers must not assume parallelFor can be cleanly retried without accounting for partial execution.
+         * 
          * @param count Number of iterations [0, count).
          * @param func Callback taking the current index.
          * @param chunkSize Optional custom chunk size. If <= 0, automatically computed for optimal cache locality.
@@ -102,6 +112,11 @@ namespace Engine {
          * @brief Returns active thread count.
          */
         unsigned int getThreadCount() const { return static_cast<unsigned int>(workers.size()); }
+
+        /**
+         * @brief Bounded ring-buffer queue capacity.
+         */
+        size_t getQueueCapacity() const { return buffer ? (bufferMask + 1) : 0; }
 
         /**
          * @brief Total number of jobs executed by the scheduler across all threads.
