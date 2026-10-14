@@ -111,16 +111,21 @@ namespace Engine {
         }
 
         auto wrappedJob = [this, job = std::move(job), handle]() {
+            struct ScopeDecrement {
+                JobHandle h;
+                ~ScopeDecrement() {
+                    if (h) h->remaining.fetch_sub(1, std::memory_order_release);
+                }
+            } guard{handle};
+
             if (job) {
                 try {
                     job();
-                } catch (const std::exception& e) {
-                    std::cerr << "[JobSystem] Job execution caught exception: " << e.what() << std::endl;
                 } catch (...) {
-                    std::cerr << "[JobSystem] Job execution caught unknown exception." << std::endl;
+                    handle->recordException(std::current_exception());
+                    std::cerr << "[JobSystem] Job execution caught exception." << std::endl;
                 }
             }
-            handle->remaining.fetch_sub(1, std::memory_order_release);
             totalJobsExecuted.fetch_add(1, std::memory_order_relaxed);
         };
 
@@ -162,16 +167,21 @@ namespace Engine {
 
         for (const auto& job : jobs) {
             auto wrappedJob = [this, job, handle]() {
+                struct ScopeDecrement {
+                    JobHandle h;
+                    ~ScopeDecrement() {
+                        if (h) h->remaining.fetch_sub(1, std::memory_order_release);
+                    }
+                } guard{handle};
+
                 if (job) {
                     try {
                         job();
-                    } catch (const std::exception& e) {
-                        std::cerr << "[JobSystem] Job execution caught exception: " << e.what() << std::endl;
                     } catch (...) {
-                        std::cerr << "[JobSystem] Job execution caught unknown exception." << std::endl;
+                        handle->recordException(std::current_exception());
+                        std::cerr << "[JobSystem] Job execution caught exception." << std::endl;
                     }
                 }
-                handle->remaining.fetch_sub(1, std::memory_order_release);
                 totalJobsExecuted.fetch_add(1, std::memory_order_relaxed);
             };
 
@@ -210,6 +220,17 @@ namespace Engine {
             }
             SPIN_PAUSE();
             std::this_thread::yield();
+        }
+
+        if (handle->hasException.load(std::memory_order_acquire)) {
+            std::exception_ptr ex;
+            {
+                std::lock_guard<std::mutex> lock(handle->exceptionMutex);
+                ex = handle->exception;
+            }
+            if (ex) {
+                std::rethrow_exception(ex);
+            }
         }
     }
 
@@ -271,15 +292,25 @@ namespace Engine {
 
         for (unsigned int w = 0; w < numThreads; ++w) {
             auto workerTask = [&func, count, chunkSize, &nextIndex, handle]() {
-                while (true) {
-                    int start = nextIndex.fetch_add(chunkSize, std::memory_order_relaxed);
-                    if (start >= count) break;
-                    int end = std::min(start + chunkSize, count);
-                    for (int i = start; i < end; ++i) {
-                        func(i);
+                struct ScopeDecrement {
+                    JobHandle h;
+                    ~ScopeDecrement() {
+                        if (h) h->remaining.fetch_sub(1, std::memory_order_release);
                     }
+                } guard{handle};
+
+                try {
+                    while (true) {
+                        int start = nextIndex.fetch_add(chunkSize, std::memory_order_relaxed);
+                        if (start >= count) break;
+                        int end = (std::min)(start + chunkSize, count);
+                        for (int i = start; i < end; ++i) {
+                            func(i);
+                        }
+                    }
+                } catch (...) {
+                    handle->recordException(std::current_exception());
                 }
-                handle->remaining.fetch_sub(1, std::memory_order_release);
             };
 
             size_t pos = enqueuePos.load(std::memory_order_relaxed);

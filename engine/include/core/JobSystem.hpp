@@ -6,18 +6,32 @@
 #include <memory>
 #include <semaphore>
 #include <mutex>
+#include <exception>
 #include <cstdint>
 
 namespace Engine {
 
     /**
      * @struct JobCounter
-     * @brief Synchronization counter for tracking job completion.
+     * @brief Synchronization counter for tracking job completion and propagating exceptions.
      */
     struct JobCounter {
         std::atomic<int> remaining{0};
+        std::atomic<bool> hasException{false};
+        std::exception_ptr exception{nullptr};
+        std::mutex exceptionMutex;
+
         bool isComplete() const {
             return remaining.load(std::memory_order_acquire) <= 0;
+        }
+
+        void recordException(std::exception_ptr eptr) {
+            if (!eptr) return;
+            std::lock_guard<std::mutex> lock(exceptionMutex);
+            if (!hasException.load(std::memory_order_relaxed)) {
+                exception = eptr;
+                hasException.store(true, std::memory_order_release);
+            }
         }
     };
 

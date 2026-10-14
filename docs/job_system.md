@@ -16,7 +16,7 @@ flowchart TD
     Sem --> W2["Worker Thread 2"]
     Sem --> WN["Worker Thread N"]
     MainThread -.-> CoopWait["Cooperative Wait (Helps execute jobs from queue)"]
-    CoopWait -.-> JobHandle["JobHandle (Atomic JobCounter)"]
+    CoopWait -.-> JobHandle["JobHandle (Atomic JobCounter & Exception Storage)"]
     W1 --> JobHandle
     W2 --> JobHandle
     WN --> JobHandle
@@ -28,7 +28,8 @@ flowchart TD
 2. **Worker Thread Pool**: Pre-allocated OS threads bound to hardware logical cores ($N-1$ worker threads by default, leaving one thread for the main engine loop).
 3. **Cooperative Semaphore Waking**: A C++20 `std::counting_semaphore` wakes sleeping workers with zero lock overhead.
 4. **Cooperative Helping on Synchronization**: When the main thread waits on a `JobHandle`, it actively steals and executes pending jobs from the queue instead of sleeping or wasting CPU cycles in spin loops.
-5. **Thread Telemetry & Diagnostics**: Native OS thread labeling (`SetThreadDescription` on Windows) and Tracy profiler instrumentation (`tracy::SetThreadName`).
+5. **Exception Safety & Propagation**: RAII scope guards ensure tasks decrement remaining counters even if an exception is thrown. Unhandled worker exceptions are captured in `JobCounter` and rethrown to the caller of `wait(handle)` or `parallelFor`.
+6. **Thread Telemetry & Diagnostics**: Native OS thread labeling (`SetThreadDescription` on Windows) and Tracy profiler instrumentation (`tracy::SetThreadName`).
 
 ---
 
@@ -66,19 +67,46 @@ std::atomic<size_t> dequeuePos{0};
 
 ---
 
-## 3. Job Handles & Cooperative Waiting
+## 3. Job Handles, Cooperative Waiting & Exception Safety
 
-Tasks can be synchronized using `JobHandle`, which encapsulates a reference-counted atomic task counter:
+Tasks can be synchronized using `JobHandle`, which encapsulates an atomic task counter and thread-safe exception capture:
 
 ```cpp
 using JobHandle = std::shared_ptr<JobCounter>;
 
 struct JobCounter {
     std::atomic<int> remaining{0};
+    std::atomic<bool> hasException{false};
+    std::exception_ptr exception{nullptr};
+    std::mutex exceptionMutex;
+
+    void recordException(std::exception_ptr eptr) {
+        if (!eptr) return;
+        std::lock_guard<std::mutex> lock(exceptionMutex);
+        if (!hasException.load(std::memory_order_relaxed)) {
+            exception = eptr;
+            hasException.store(true, std::memory_order_release);
+        }
+    }
 };
 ```
 
-### Cooperative Wait Implementation
+### RAII Scope Guard for Completion Accounting
+
+To prevent infinite spin hangs if a task throws an exception, all worker closures decrement the handle through an RAII scope guard:
+
+```cpp
+struct ScopeDecrement {
+    JobHandle h;
+    ~ScopeDecrement() {
+        if (h) h->remaining.fetch_sub(1, std::memory_order_release);
+    }
+} guard{handle};
+```
+
+Regardless of whether the task exits normally, returns early, or throws an unhandled exception, `remaining` is guaranteed to decrement via stack unwinding.
+
+### Cooperative Wait & Exception Rethrow
 
 When calling `JobSystem::wait(JobHandle handle)`:
 
@@ -95,11 +123,23 @@ void JobSystem::wait(const JobHandle& handle) {
             std::this_thread::yield();
         }
     }
+
+    // Propagate captured exceptions to the waiting thread
+    if (handle->hasException.load(std::memory_order_acquire)) {
+        std::exception_ptr ex;
+        {
+            std::lock_guard<std::mutex> lock(handle->exceptionMutex);
+            ex = handle->exception;
+        }
+        if (ex) {
+            std::rethrow_exception(ex);
+        }
+    }
 }
 ```
 
 * **No Idle Core Waste**: The waiting thread becomes a dynamic worker, popping and executing tasks. This guarantees progress even if worker threads are temporarily preempted by the OS scheduler.
-* **Hardware Spin Backoff**: If no work is currently available in the queue, it performs low-power hardware pause instructions (`_mm_pause()` on x86/x64, `__yield()` on ARM) before yielding its timeslice.
+* **Immediate Error Visibility**: If a worker throws, the waiting caller immediately catches the re-thrown `std::exception` instead of experiencing mysterious hangs or deadlocks.
 
 ---
 
@@ -121,8 +161,8 @@ The engine's `parallelFor` uses **chunked dynamic partitioning**:
 
 ```cpp
 if (chunkSize <= 0) {
-    int autoChunk = std::max(1, count / static_cast<int>(numThreads * 8));
-    chunkSize = std::clamp(autoChunk, 1, 128);
+    int autoChunk = (std::max)(1, count / static_cast<int>(numThreads * 8));
+    chunkSize = (std::clamp)(autoChunk, 1, 128);
 }
 
 std::atomic<int> nextIndex{0};
@@ -131,15 +171,25 @@ handle->remaining.store(static_cast<int>(numThreads), std::memory_order_release)
 
 for (unsigned int w = 0; w < numThreads; ++w) {
     pushJob([&func, count, chunkSize, &nextIndex, handle]() {
-        while (true) {
-            int start = nextIndex.fetch_add(chunkSize, std::memory_order_relaxed);
-            if (start >= count) break;
-            int end = std::min(start + chunkSize, count);
-            for (int i = start; i < end; ++i) {
-                func(i);
+        struct ScopeDecrement {
+            JobHandle h;
+            ~ScopeDecrement() {
+                if (h) h->remaining.fetch_sub(1, std::memory_order_release);
             }
+        } guard{handle};
+
+        try {
+            while (true) {
+                int start = nextIndex.fetch_add(chunkSize, std::memory_order_relaxed);
+                if (start >= count) break;
+                int end = (std::min)(start + chunkSize, count);
+                for (int i = start; i < end; ++i) {
+                    func(i);
+                }
+            }
+        } catch (...) {
+            handle->recordException(std::current_exception());
         }
-        handle->remaining.fetch_sub(1, std::memory_order_release);
     });
 }
 
@@ -150,6 +200,7 @@ wait(handle);
 1. **Load Balancing**: Faster cores automatically claim more chunks via `fetch_add(chunkSize)`.
 2. **Minimal Bus Contention**: Workers make $\frac{N}{\text{chunkSize}}$ atomic operations instead of $N$.
 3. **Zero Deadlock Risk**: Coordinated by the cooperative `wait()` loop.
+4. **Exception-Safe**: Exceptions inside `func(i)` are safely captured and rethrown on the calling thread.
 
 ---
 

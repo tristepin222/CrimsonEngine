@@ -745,9 +745,13 @@ namespace Engine {
             // Run user update callback
             onUpdate(dt);
 
-            // Tick scenes and ECS systems
+            // Tick scenes and staged ECS systems
             sceneManager.update(dt);
-            systemManager.updateAll(dt);
+            systemManager.updateStage(SystemStage::PreUpdate, dt);
+            systemManager.updateStage(SystemStage::PhysicsUpdate, dt);
+            systemManager.updateStageParallel(SystemStage::Update, dt, JobSystem::getInstance());
+            systemManager.updateStageParallel(SystemStage::PostUpdate, dt, JobSystem::getInstance());
+
             if (!editorMode.isPlaying && config.enableEditor) {
                 systemManager.updateEditorAll(dt);
             }

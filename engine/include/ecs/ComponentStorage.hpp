@@ -74,8 +74,10 @@ public:
 
         std::uint32_t denseIdx = sparse[id];
         if (denseIdx != INVALID_INDEX) {
+            if (entities[denseIdx] != e) {
+                throw std::runtime_error("ComponentStorage::add: Attempted to overwrite component with mismatched/stale entity handle!");
+            }
             data[denseIdx] = std::move(comp);
-            entities[denseIdx] = e;
             return;
         }
 
@@ -101,7 +103,7 @@ public:
      */
     void remove(Entity e) {
         std::uint32_t id = e.getId();
-        if (id >= sparse.size() || sparse[id] == INVALID_INDEX) return;
+        if (id >= sparse.size() || sparse[id] == INVALID_INDEX || entities[sparse[id]] != e) return;
 
         std::uint32_t index = sparse[id];
         std::uint32_t last = static_cast<std::uint32_t>(data.size() - 1);
@@ -133,8 +135,8 @@ public:
      */
     T& get(Entity e) {
         std::uint32_t id = e.getId();
-        if (id >= sparse.size() || sparse[id] == INVALID_INDEX) {
-            throw std::runtime_error("Component missing for target entity!");
+        if (id >= sparse.size() || sparse[id] == INVALID_INDEX || entities[sparse[id]] != e) {
+            throw std::runtime_error("ComponentStorage::get: Component missing or entity handle is stale/invalid!");
         }
         return data[sparse[id]];
     }
@@ -146,8 +148,8 @@ public:
      */
     const T& get(Entity e) const {
         std::uint32_t id = e.getId();
-        if (id >= sparse.size() || sparse[id] == INVALID_INDEX) {
-            throw std::runtime_error("Component missing for target entity!");
+        if (id >= sparse.size() || sparse[id] == INVALID_INDEX || entities[sparse[id]] != e) {
+            throw std::runtime_error("ComponentStorage::get: Component missing or entity handle is stale/invalid!");
         }
         return data[sparse[id]];
     }
@@ -159,7 +161,7 @@ public:
      */
     T* tryGet(Entity e) {
         std::uint32_t id = e.getId();
-        if (id >= sparse.size() || sparse[id] == INVALID_INDEX) return nullptr;
+        if (id >= sparse.size() || sparse[id] == INVALID_INDEX || entities[sparse[id]] != e) return nullptr;
         return &data[sparse[id]];
     }
 
@@ -170,7 +172,7 @@ public:
      */
     const T* tryGet(Entity e) const {
         std::uint32_t id = e.getId();
-        if (id >= sparse.size() || sparse[id] == INVALID_INDEX) return nullptr;
+        if (id >= sparse.size() || sparse[id] == INVALID_INDEX || entities[sparse[id]] != e) return nullptr;
         return &data[sparse[id]];
     }
 

@@ -225,9 +225,9 @@ if(NOT CMAKE_GENERATOR_PLATFORM MATCHES "ARM")
     )
 endif()
 
+# --- Unit & Regression Tests Executable ---
+add_executable(engine_tests "${CMAKE_CURRENT_SOURCE_DIR}/../tests/unit_tests.cpp")
+target_link_libraries(engine_tests PRIVATE engine)
+target_include_directories(engine_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
-
-
-
-
-message(STATUS "Configured editor, game_runtime, and reflection_generator executables")
+message(STATUS "Configured editor, game_runtime, reflection_generator, and engine_tests executables")

@@ -8,6 +8,7 @@
 #include <vector>
 #include <array>
 #include <memory>
+#include <mutex>
 
 #include "core/EngineAPI.hpp"
 #include "profiler/Profiler.hpp"
@@ -16,7 +17,7 @@ class Registry;
 
 /**
  * @class EntityCommandBuffer
- * @brief Records entity and component mutation commands for safe deferred playback.
+ * @brief Thread-safe recorder for entity and component mutations for safe deferred playback.
  * Prevents iterator invalidation during View iterations or multithreaded system passes.
  */
 class EntityCommandBuffer {
@@ -56,14 +57,22 @@ public:
      * @brief Clears pending commands without executing.
      */
     void clear() {
+        std::lock_guard<std::mutex> lock(m_mutex);
         commands.clear();
     }
 
+    bool empty() const {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        return commands.empty();
+    }
 
-    bool empty() const { return commands.empty(); }
-    size_t size() const { return commands.size(); }
+    size_t size() const {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        return commands.size();
+    }
 
 private:
+    mutable std::mutex m_mutex;
     std::vector<std::function<void(Registry&)>> commands;
 };
 
@@ -242,15 +251,32 @@ public:
     /**
      * @brief Exposes the component mask for a given entity.
      */
+    /**
+     * @brief Exposes the component mask for a given entity. Throws if invalid or stale.
+     */
     ComponentMask& getMask(Entity e) {
         return entities.getMask(e);
     }
 
     /**
-     * @brief Exposes the const component mask for a given entity.
+     * @brief Exposes the const component mask for a given entity. Throws if invalid or stale.
      */
     const ComponentMask& getMask(Entity e) const {
         return entities.getMask(e);
+    }
+
+    /**
+     * @brief Non-throwing pointer lookup for component mask. Returns nullptr if stale/invalid.
+     */
+    ComponentMask* tryGetMask(Entity e) {
+        return entities.tryGetMask(e);
+    }
+
+    /**
+     * @brief Const non-throwing pointer lookup for component mask. Returns nullptr if stale/invalid.
+     */
+    const ComponentMask* tryGetMask(Entity e) const {
+        return entities.tryGetMask(e);
     }
 
     /**
@@ -261,7 +287,7 @@ public:
     }
 
     /**
-     * @brief Emplaces a component on an entity.
+     * @brief Emplaces a component on an entity. Throws if entity handle is stale or invalid.
      * @tparam T Component type to emplace.
      * @param e Entity to emplace component on.
      * @param comp Component instance to add.
@@ -269,6 +295,9 @@ public:
      */
     template<typename T>
     T& emplace(Entity e, T&& comp) {
+        if (!entities.isValid(e)) {
+            throw std::runtime_error("Registry::emplace: Attempted to emplace component on invalid or stale entity handle!");
+        }
         ensureStorage<T>();
         getStorage<T>()->add(e, std::forward<T>(comp));
 
@@ -283,7 +312,7 @@ public:
     }
 
     /**
-     * @brief Emplaces or replaces a component on an entity.
+     * @brief Emplaces or replaces a component on an entity. Throws if entity handle is stale or invalid.
      */
     template<typename T>
     T& emplace_or_replace(Entity e, T&& comp) {
@@ -297,6 +326,7 @@ public:
      */
     template<typename T>
     void remove(Entity e) {
+        if (!entities.isValid(e)) return;
         auto* storage = getStorage<T>();
         if (storage && storage->has(e)) {
             storage->remove(e);
@@ -310,33 +340,35 @@ public:
     }
 
     /**
-     * @brief Retrieves a pointer to a component of type T on an entity.
+     * @brief Retrieves a pointer to a component of type T on an entity. Returns nullptr if stale or not found.
      * @tparam T Component type.
      * @param e Target entity.
      * @return Pointer to the component, or nullptr if not found.
      */
     template<typename T>
     T* get(Entity e) {
+        if (!entities.isValid(e)) return nullptr;
         auto* storage = getStorage<T>();
-        if (!storage || !storage->has(e)) return nullptr;
-        return &storage->get(e);
+        if (!storage) return nullptr;
+        return storage->tryGet(e);
     }
 
     /**
-     * @brief Const overload: retrieves const pointer to a component of type T on an entity.
+     * @brief Const overload: retrieves const pointer to a component of type T on an entity. Returns nullptr if stale or not found.
      * @tparam T Component type.
      * @param e Target entity.
      * @return Const pointer to the component, or nullptr if not found.
      */
     template<typename T>
     const T* get(Entity e) const {
+        if (!entities.isValid(e)) return nullptr;
         const auto* storage = getStorage<T>();
-        if (!storage || !storage->has(e)) return nullptr;
-        return &storage->get(e);
+        if (!storage) return nullptr;
+        return storage->tryGet(e);
     }
 
     /**
-     * @brief Non-throwing pointer lookup for component of type T on an entity.
+     * @brief Non-throwing pointer lookup for component of type T on an entity. Returns nullptr if stale or missing.
      * @tparam T Component type.
      * @param e Target entity.
      * @return Pointer or nullptr.
@@ -347,7 +379,7 @@ public:
     }
 
     /**
-     * @brief Const non-throwing pointer lookup for component of type T on an entity.
+     * @brief Const non-throwing pointer lookup for component of type T on an entity. Returns nullptr if stale or missing.
      * @tparam T Component type.
      * @param e Target entity.
      * @return Const pointer or nullptr.
@@ -358,7 +390,7 @@ public:
     }
 
     /**
-     * @brief Retrieves a reference to a component of type T on an entity. Throws if missing.
+     * @brief Retrieves a reference to a component of type T on an entity. Throws if stale or missing.
      * @tparam T Component type.
      * @param e Target entity.
      * @return Reference to the component.
@@ -366,12 +398,12 @@ public:
     template<typename T>
     T& getRef(Entity e) {
         T* ptr = get<T>(e);
-        if (!ptr) throw std::runtime_error("Component missing!");
+        if (!ptr) throw std::runtime_error("Registry::getRef: Component missing or entity handle is invalid/stale!");
         return *ptr;
     }
 
     /**
-     * @brief Const overload: retrieves const reference to component of type T on an entity. Throws if missing.
+     * @brief Const overload: retrieves const reference to component of type T on an entity. Throws if stale or missing.
      * @tparam T Component type.
      * @param e Target entity.
      * @return Const reference to the component.
@@ -379,7 +411,7 @@ public:
     template<typename T>
     const T& getRef(Entity e) const {
         const T* ptr = get<T>(e);
-        if (!ptr) throw std::runtime_error("Component missing!");
+        if (!ptr) throw std::runtime_error("Registry::getRef: Component missing or entity handle is invalid/stale!");
         return *ptr;
     }
 
@@ -398,16 +430,31 @@ public:
     }
 
     /**
-     * @brief Checks if an entity possesses a component of type T.
+     * @brief Checks if an entity possesses a component of type T. Returns false if stale or invalid.
      * @tparam T Component type.
      * @param e Target entity.
-     * @return True if component exists, false otherwise.
+     * @return True if component exists and entity is valid, false otherwise.
      */
     template<typename T>
     bool has(Entity e) const {
+        if (!entities.isValid(e)) return false;
         std::size_t id = getComponentTypeId<T>();
         if (id >= MAX_COMPONENTS || !storages[id]) return false;
         return static_cast<const ComponentStorage<T>*>(storages[id].get())->has(e);
+    }
+
+    /**
+     * @brief Accesses the deferred entity command buffer.
+     */
+    EntityCommandBuffer& getCommandBuffer() {
+        return m_commandBuffer;
+    }
+
+    /**
+     * @brief Flushes deferred commands against this registry.
+     */
+    void flushCommandBuffer() {
+        m_commandBuffer.execute(*this);
     }
 
     /**
@@ -577,6 +624,8 @@ private:
     std::unordered_map<std::size_t, std::vector<ComponentAddedCallback>> componentAddedCallbacks;
     /** @brief Callbacks for component removals. */
     std::unordered_map<std::size_t, std::vector<ComponentRemovedCallback>> componentRemovedCallbacks;
+    /** @brief Built-in thread-safe deferred entity command buffer. */
+    EntityCommandBuffer m_commandBuffer;
 
 
     /**
@@ -648,6 +697,7 @@ private:
 };
 
 inline void EntityCommandBuffer::destroyEntity(Entity e) {
+    std::lock_guard<std::mutex> lock(m_mutex);
     commands.push_back([e](Registry& reg) {
         reg.destroy(e);
     });
@@ -655,6 +705,7 @@ inline void EntityCommandBuffer::destroyEntity(Entity e) {
 
 template<typename T>
 inline void EntityCommandBuffer::addComponent(Entity e, T comp) {
+    std::lock_guard<std::mutex> lock(m_mutex);
     commands.push_back([e, c = std::move(comp)](Registry& reg) mutable {
         reg.emplace_or_replace<T>(e, std::move(c));
     });
@@ -662,22 +713,29 @@ inline void EntityCommandBuffer::addComponent(Entity e, T comp) {
 
 template<typename T>
 inline void EntityCommandBuffer::removeComponent(Entity e) {
+    std::lock_guard<std::mutex> lock(m_mutex);
     commands.push_back([e](Registry& reg) {
         reg.remove<T>(e);
     });
 }
 
 inline void EntityCommandBuffer::setActive(Entity e, bool active) {
+    std::lock_guard<std::mutex> lock(m_mutex);
     commands.push_back([e, active](Registry& reg) {
         reg.setActive(e, active);
     });
 }
 
 inline void EntityCommandBuffer::execute(Registry& reg) {
-    for (auto& cmd : commands) {
+    std::vector<std::function<void(Registry&)>> cmds;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        cmds = std::move(commands);
+        commands.clear();
+    }
+    for (auto& cmd : cmds) {
         cmd(reg);
     }
-    commands.clear();
 }
 
 

@@ -3,6 +3,7 @@
 #include <stack>
 #include <cstdint>
 #include <algorithm>
+#include <stdexcept>
 #include "Entity.hpp"
 #include "EntityHash.hpp"
 
@@ -59,8 +60,10 @@ public:
             id = freeIds.top();
             freeIds.pop();
         } else {
-            id = static_cast<Entity::IdType>(generations.size());
-            growCapacity(id + 1);
+            if (nextId >= generations.size()) {
+                growCapacity(nextId + 1);
+            }
+            id = nextId++;
         }
 
         flags[id] = FLAG_ALIVE | FLAG_ACTIVE;
@@ -97,21 +100,43 @@ public:
     }
 
     /**
-     * @brief Retrieves the component mask of an entity.
+     * @brief Retrieves the component mask of an entity. Throws if stale or invalid.
      * @param e Entity to check.
      * @return Reference to component mask.
      */
     ComponentMask& getMask(Entity e) {
+        if (!isValid(e)) {
+            throw std::runtime_error("EntityManager::getMask: Attempted to access component mask of invalid or stale entity handle!");
+        }
         return masks[e.getId()];
     }
 
     /**
-     * @brief Retrieves the const component mask of an entity.
+     * @brief Retrieves the const component mask of an entity. Throws if stale or invalid.
      * @param e Entity to check.
      * @return Const reference to component mask.
      */
     const ComponentMask& getMask(Entity e) const {
+        if (!isValid(e)) {
+            throw std::runtime_error("EntityManager::getMask: Attempted to access component mask of invalid or stale entity handle!");
+        }
         return masks[e.getId()];
+    }
+
+    /**
+     * @brief Non-throwing pointer lookup for component mask. Returns nullptr if stale or invalid.
+     */
+    ComponentMask* tryGetMask(Entity e) {
+        if (!isValid(e)) return nullptr;
+        return &masks[e.getId()];
+    }
+
+    /**
+     * @brief Const non-throwing pointer lookup for component mask. Returns nullptr if stale or invalid.
+     */
+    const ComponentMask* tryGetMask(Entity e) const {
+        if (!isValid(e)) return nullptr;
+        return &masks[e.getId()];
     }
 
     /**
@@ -205,6 +230,8 @@ private:
     std::vector<uint8_t> flags;
     /** @brief Stack of available recycled identifiers. */
     std::stack<Entity::IdType> freeIds;
+    /** @brief Monotonically increasing next available entity ID when freeIds is exhausted. */
+    Entity::IdType nextId = 0;
     /** @brief Dynamic component masks indexable by entity ID. */
     std::vector<ComponentMask> masks;
 };
