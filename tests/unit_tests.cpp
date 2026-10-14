@@ -10,6 +10,7 @@
 #include "ecs/Entity.hpp"
 #include "ecs/EntityManager.hpp"
 #include "ecs/ComponentStorage.hpp"
+#include "ecs/SystemManager.hpp"
 #include "core/JobSystem.hpp"
 
 // Non-stripping test assertion macro that works reliably in Release (NDEBUG) builds
@@ -423,6 +424,117 @@ void testEntityCommandBufferExceptionSafety() {
 }
 
 // --------------------------------------------------------------------------
+// 9. pushJobs() Batch Exceeding Queue Capacity (Deadlock-Proof with Timeout)
+// --------------------------------------------------------------------------
+void testPushJobsExceedingQueueCapacity() {
+    std::cout << "[Test 9] Running pushJobs() Batch Exceeding Queue Capacity Test..." << std::endl;
+    auto& js = Engine::JobSystem::getInstance();
+    js.shutdown();
+
+    // Configure small queue capacity (128 cells) and 2 worker threads
+    constexpr size_t SMALL_CAPACITY = 128;
+    js.initialize(2, SMALL_CAPACITY);
+    TEST_ASSERT(js.getQueueCapacity() == SMALL_CAPACITY, "Queue capacity must be exactly 128");
+
+    // Batch size of 1,024 jobs (8x the queue capacity)
+    constexpr int BATCH_SIZE = 1024;
+    std::atomic<int> executedCount{0};
+
+    std::vector<std::function<void()>> batch;
+    batch.reserve(BATCH_SIZE);
+    for (int i = 0; i < BATCH_SIZE; ++i) {
+        batch.push_back([&executedCount]() {
+            executedCount.fetch_add(1, std::memory_order_relaxed);
+        });
+    }
+
+    std::atomic<bool> completed{false};
+    std::atomic<bool> timedOut{false};
+
+    // Run pushJobs + wait in a separate thread so a deadlock can be caught via timeout instead of hanging CI
+    std::thread testThread([&js, &batch, &completed]() {
+        auto handle = js.pushJobs(batch);
+        js.wait(handle);
+        completed.store(true, std::memory_order_release);
+    });
+
+    auto start = std::chrono::steady_clock::now();
+    while (!completed.load(std::memory_order_acquire)) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - start).count();
+        if (elapsed >= 5) {
+            timedOut.store(true, std::memory_order_release);
+            break;
+        }
+    }
+
+    if (timedOut.load()) {
+        std::cerr << "[DEADLOCK DETECTED] pushJobs() deadlocked when batch size (1024) exceeded queue capacity (128)!" << std::endl;
+        testThread.detach();
+        TEST_ASSERT(false, "pushJobs() deadlocked on batch larger than queue capacity!");
+    } else {
+        testThread.join();
+    }
+
+    TEST_ASSERT(executedCount.load() == BATCH_SIZE, "All 1,024 batch jobs must have completed");
+    std::cout << "[Test 9] PASSED: pushJobs() successfully processed batch of 1,024 jobs through a 128-entry queue without deadlocking." << std::endl;
+
+    // Reset JobSystem to standard configuration
+    js.shutdown();
+    js.initialize();
+}
+
+// --------------------------------------------------------------------------
+// 10. SystemManager::flushCommandBuffer() Both Buffers Flushed On Error Test
+// --------------------------------------------------------------------------
+void testSystemManagerFlushCommandBufferBothBuffers() {
+    std::cout << "[Test 10] Running SystemManager::flushCommandBuffer() Both Buffers Evaluation Test..." << std::endl;
+    Registry registry;
+    SystemManager sm;
+
+    Entity entityA = registry.create();
+    Entity entityB = registry.create();
+    Entity staleEntity = registry.create();
+    registry.destroy(staleEntity);
+    TEST_ASSERT(!registry.isValid(staleEntity), "staleEntity must be invalid");
+
+    // In SystemManager's command buffer:
+    // 1. Add invalid command that throws (stale entity)
+    // 2. Add valid command for entityA
+    sm.getCommandBuffer().addComponent<TestComponent>(staleEntity, TestComponent{1, "StaleSM"});
+    sm.getCommandBuffer().addComponent<TestComponent>(entityA, TestComponent{10, "ValidSM"});
+
+    // In Registry's command buffer:
+    // Add valid command for entityB
+    registry.getCommandBuffer().addComponent<TestComponent>(entityB, TestComponent{20, "ValidReg"});
+
+    TEST_ASSERT(!sm.getCommandBuffer().empty(), "SM command buffer should not be empty");
+    TEST_ASSERT(!registry.getCommandBuffer().empty(), "Registry command buffer should not be empty");
+
+    // Execute flush with throwOnError = true
+    bool caughtExpectedError = false;
+    try {
+        sm.flushCommandBuffer(registry, true);
+    } catch (const std::runtime_error& e) {
+        caughtExpectedError = true;
+    }
+
+    TEST_ASSERT(caughtExpectedError, "flushCommandBuffer must rethrow when throwOnError is true");
+
+    // Verify BOTH buffers were fully drained and executed despite the exception in the first buffer
+    TEST_ASSERT(sm.getCommandBuffer().empty(), "SM command buffer must be empty after flush");
+    TEST_ASSERT(registry.getCommandBuffer().empty(), "Registry command buffer must be empty after flush (NOT skipped!)");
+
+    TEST_ASSERT(registry.has<TestComponent>(entityA), "entityA must have received component from SM buffer");
+    TEST_ASSERT(registry.get<TestComponent>(entityA)->value == 10, "entityA value must be 10");
+
+    TEST_ASSERT(registry.has<TestComponent>(entityB), "entityB must have received component from Registry buffer");
+    TEST_ASSERT(registry.get<TestComponent>(entityB)->value == 20, "entityB value must be 20");
+
+    std::cout << "[Test 10] PASSED: SystemManager::flushCommandBuffer() evaluated both command buffers without stopping on first error." << std::endl;
+}
+
+// --------------------------------------------------------------------------
 // Main Entry Point
 // --------------------------------------------------------------------------
 int main() {
@@ -439,6 +551,8 @@ int main() {
         testShutdownAndRestart();
         testEntityCommandBufferConcurrency();
         testEntityCommandBufferExceptionSafety();
+        testPushJobsExceedingQueueCapacity();
+        testSystemManagerFlushCommandBufferBothBuffers();
     } catch (const std::exception& e) {
         std::cerr << "[TEST SUITE FAILED] Unhandled exception: " << e.what() << std::endl;
         return 1;
@@ -448,7 +562,7 @@ int main() {
     }
 
     std::cout << "======================================================" << std::endl;
-    std::cout << "           ALL 8 TEST SUITES PASSED!                  " << std::endl;
+    std::cout << "           ALL 10 TEST SUITES PASSED!                 " << std::endl;
     std::cout << "======================================================" << std::endl;
     return 0;
 }

@@ -224,7 +224,7 @@ When an iteration throws an exception within `parallelFor()`:
 
 ## 5. Batch Job Enqueueing (`pushJobs`)
 
-For submitting multiple independent tasks simultaneously, `pushJobs` enqueues an entire list of jobs in a tight loop and signals the worker semaphore once, reducing kernel transition overhead:
+For submitting multiple independent tasks simultaneously, `pushJobs` enqueues an entire list of jobs while incrementally publishing waking signals to the worker semaphore:
 
 ```cpp
 std::vector<std::function<void()>> batch;
@@ -235,6 +235,12 @@ for (auto& task : tasks) {
 JobHandle batchHandle = jobSystem.pushJobs(batch);
 jobSystem.wait(batchHandle);
 ```
+
+### Deadlock Prevention for Batches Exceeding Queue Capacity
+When submitting a large batch whose size exceeds the bounded ring-buffer capacity (e.g. 1,024 jobs submitted into a 128-cell queue):
+* **Incremental Publishing**: `pushJobs` tracks an `unnotified` counter and wakes worker threads incrementally (every 16 jobs or `bufferMask / 4`) instead of waiting until the end of the entire batch.
+* **Immediate Backpressure Release**: If the producer encounters a full queue (`diff < 0`), it immediately flushes any unnotified jobs to `jobSemaphore.release()` before entering the spin-pause / yield loop.
+* **Continuous Draining**: Sleeping workers are guaranteed to be awake and consuming jobs from the buffer, continuously opening slots for the producer. This completely prevents producer-consumer deadlocks and guarantees exact $1:1$ semaphore accounting.
 
 ---
 

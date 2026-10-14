@@ -141,10 +141,22 @@ public:
      */
     size_t flushCommandBuffer(Registry& registry, bool throwOnError = false, std::vector<std::exception_ptr>* outErrors = nullptr) {
         size_t count = 0;
+        std::vector<std::exception_ptr> localErrors;
+        std::vector<std::exception_ptr>* targetErrors = outErrors ? outErrors : &localErrors;
+
+        // Flush SystemManager buffer first without throwing immediately so the second buffer is not skipped
         if (!commandBuffer.empty()) {
-            count += commandBuffer.execute(registry, throwOnError, outErrors);
+            count += commandBuffer.execute(registry, false, targetErrors);
         }
-        count += registry.flushCommandBuffer(throwOnError, outErrors);
+
+        // Flush Registry buffer without throwing immediately
+        count += registry.flushCommandBuffer(false, targetErrors);
+
+        // If requested to throw on error, rethrow the first captured error after BOTH buffers have flushed
+        if (throwOnError && !targetErrors->empty()) {
+            std::rethrow_exception((*targetErrors)[0]);
+        }
+
         return count;
     }
 

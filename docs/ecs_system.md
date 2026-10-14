@@ -82,6 +82,7 @@ The production-ready command buffer enforces a **non-discarding, exception-safe 
 1. **Never Discard Subsequent Commands**: `ecb.execute(Registry& reg, bool throwOnError = false, std::vector<std::exception_ptr>* outErrors = nullptr)` catches exceptions per command. If an invalid or stale entity handle causes a command to fail (e.g., attempting to emplace onto a recycled entity), the error is logged or recorded, and playback immediately continues for all remaining commands in the queue.
 2. **Optional Error Collection & Rethrowing**: Callers can inspect `outErrors` to diagnose which operations failed, or set `throwOnError = true` to rethrow the first encountered exception after all valid commands have completed.
 3. **Queue Invariant**: `execute()` drains the command buffer under the recording lock so newly submitted commands during playback are never lost.
+4. **Dual-Buffer Flush Guarantees**: `SystemManager::flushCommandBuffer(registry, throwOnError)` evaluates both the `SystemManager` command buffer and the `Registry` command buffer completely. An exception in the first buffer never prevents the second buffer from being flushed; errors from both buffers are collected, and the first exception is rethrown only after both buffers have completed playback.
 
 ---
 

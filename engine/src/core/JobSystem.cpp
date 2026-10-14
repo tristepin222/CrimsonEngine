@@ -170,6 +170,9 @@ namespace Engine {
             return handle;
         }
 
+        size_t unnotified = 0;
+        const size_t wakeThreshold = (bufferMask > 0) ? (std::max)(size_t(1), (std::min)(size_t(16), (bufferMask + 1) / 4)) : 1;
+
         for (const auto& job : jobs) {
             auto wrappedJob = [this, job, handle]() {
                 struct ScopeDecrement {
@@ -199,9 +202,19 @@ namespace Engine {
                     if (enqueuePos.compare_exchange_weak(pos, pos + 1, std::memory_order_relaxed)) {
                         cell->job = std::move(wrappedJob);
                         cell->sequence.store(pos + 1, std::memory_order_release);
+                        ++unnotified;
+                        if (unnotified >= wakeThreshold) {
+                            jobSemaphore.release(static_cast<int>(unnotified));
+                            unnotified = 0;
+                        }
                         break;
                     }
                 } else if (diff < 0) {
+                    // Queue is full! Before waiting, ensure any queued jobs are visible to sleeping workers
+                    if (unnotified > 0) {
+                        jobSemaphore.release(static_cast<int>(unnotified));
+                        unnotified = 0;
+                    }
                     for (int spin = 0; spin < 64; ++spin) {
                         SPIN_PAUSE();
                     }
@@ -213,7 +226,10 @@ namespace Engine {
             }
         }
 
-        jobSemaphore.release(static_cast<int>(jobs.size()));
+        if (unnotified > 0) {
+            jobSemaphore.release(static_cast<int>(unnotified));
+            unnotified = 0;
+        }
         return handle;
     }
 
