@@ -6,14 +6,27 @@
 #include <memory>
 #include <semaphore>
 #include <mutex>
-#include <vector>
-
+#include <cstdint>
 
 namespace Engine {
 
     /**
+     * @struct JobCounter
+     * @brief Synchronization counter for tracking job completion.
+     */
+    struct JobCounter {
+        std::atomic<int> remaining{0};
+        bool isComplete() const {
+            return remaining.load(std::memory_order_acquire) <= 0;
+        }
+    };
+
+    /** @brief Lightweight shared handle representing an asynchronous job or batch of jobs. */
+    using JobHandle = std::shared_ptr<JobCounter>;
+
+    /**
      * @class JobSystem
-     * @brief A lightweight thread pool scheduler for processing concurrent jobs in parallel.
+     * @brief High-performance lock-free thread pool scheduler for concurrent work distribution.
      */
     class JobSystem {
     public:
@@ -37,19 +50,49 @@ namespace Engine {
         void shutdown();
 
         /**
-         * @brief Enqueues a single void-returning task.
+         * @brief Enqueues a single void-returning task and returns a completion handle.
+         * @param job Callable task closure.
+         * @return JobHandle to track task completion or wait on it.
          */
-        void pushJob(std::function<void()> job);
+        JobHandle pushJob(std::function<void()> job);
 
         /**
-         * @brief Splits a total loop count into chunks and evaluates them in parallel.
+         * @brief Enqueues a batch of void-returning tasks and returns a single combined completion handle.
+         * @param jobs Vector of callable tasks.
+         * @return JobHandle tracking the batch.
          */
-        void parallelFor(int count, std::function<void(int)> func);
+        JobHandle pushJobs(const std::vector<std::function<void()>>& jobs);
+
+        /**
+         * @brief Waits for a job handle to complete, cooperatively executing queued jobs on the calling thread.
+         * @param handle The JobHandle to wait on.
+         */
+        void wait(const JobHandle& handle);
+
+        /**
+         * @brief Checks if a job handle has finished executing.
+         * @param handle The JobHandle to check.
+         * @return True if completed or null.
+         */
+        bool isComplete(const JobHandle& handle) const;
+
+        /**
+         * @brief Splits a total loop count into chunks and evaluates them in parallel across worker threads.
+         * @param count Number of iterations [0, count).
+         * @param func Callback taking the current index.
+         * @param chunkSize Optional custom chunk size. If <= 0, automatically computed for optimal cache locality.
+         */
+        void parallelFor(int count, std::function<void(int)> func, int chunkSize = 0);
 
         /**
          * @brief Returns active thread count.
          */
         unsigned int getThreadCount() const { return static_cast<unsigned int>(workers.size()); }
+
+        /**
+         * @brief Total number of jobs executed by the scheduler across all threads.
+         */
+        uint64_t getTotalJobsExecuted() const { return totalJobsExecuted.load(std::memory_order_relaxed); }
 
         // Tries to execute a single job from the queue (returns true if a job was executed)
         bool tryExecuteOneJob();
@@ -59,7 +102,7 @@ namespace Engine {
         ~JobSystem();
 
         // Worker thread function loop
-        void workerThreadLoop();
+        void workerThreadLoop(unsigned int threadIndex);
 
         std::vector<std::thread> workers;
 
@@ -81,6 +124,8 @@ namespace Engine {
 
         std::atomic<bool> stop{false};
         std::atomic<bool> initialized{false};
+        std::atomic<uint64_t> totalJobsExecuted{0};
     };
 
 } // namespace Engine
+

@@ -14,10 +14,15 @@ namespace Engine {
      */
     class ENGINE_API AudioSystem : public System {
     public:
+        const char* getName() const override { return "AudioSystem"; }
+        SystemStage getStage() const override { return SystemStage::PostUpdate; }
+        bool isParallelSafe() const override { return true; }
+
         AudioSystem(Registry& reg, EditorModeState& editorMode);
         virtual ~AudioSystem();
 
         virtual void update(float dt) override;
+
 
     private:
         Registry& registry;

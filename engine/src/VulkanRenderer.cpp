@@ -230,8 +230,19 @@ void VulkanRenderer::createPipeline() {
 
 /**
  * @brief Prepares Vulkan contexts for command recording.
+ * @return True if frame recording successfully started; false if swapchain was resized or minimized.
  */
-void VulkanRenderer::beginFrame(const std::function<void(VkCommandBuffer)>& prePass) {
+bool VulkanRenderer::beginFrame(const std::function<void(VkCommandBuffer)>& prePass) {
+    m_frameActive = false;
+    resetMetrics();
+
+    int width = 0, height = 0;
+    glfwGetFramebufferSize(window, &width, &height);
+    if (width == 0 || height == 0) {
+        // Window is minimized, skip frame recording
+        return false;
+    }
+
     frameSync.waitForCurrentFrame();
 
     VkResult res = vkAcquireNextImageKHR(
@@ -245,7 +256,7 @@ void VulkanRenderer::beginFrame(const std::function<void(VkCommandBuffer)>& preP
 
     if (res == VK_ERROR_OUT_OF_DATE_KHR) {
         recreateSwapchain();
-        return;
+        return false;
     }
     else if (res != VK_SUCCESS && res != VK_SUBOPTIMAL_KHR) {
         throw std::runtime_error("Failed to acquire swapchain image");
@@ -259,7 +270,11 @@ void VulkanRenderer::beginFrame(const std::function<void(VkCommandBuffer)>& preP
     } else if (m_prePass) {
         m_prePass(cmd);
     }
+
+    m_frameActive = true;
+    return true;
 }
+
 
 void VulkanRenderer::beginShadowPass(VkCommandBuffer cmd, uint32_t layerIndex) {
     if (shadowRenderPass == VK_NULL_HANDLE || layerIndex >= TOTAL_SHADOW_LAYERS || shadowLayerFramebuffers[layerIndex] == VK_NULL_HANDLE) return;
@@ -488,11 +503,13 @@ void VulkanRenderer::beginMainPass(VkCommandBuffer cmd) {
  * @brief Stops active render pass recording.
  */
 void VulkanRenderer::endFrame() {
+    if (!m_frameActive) return;
     VkCommandBuffer cmd = cmdManager.getCurrentCommandBuffer();
     vkCmdEndRenderPass(cmd);
     cmdManager.endFrame();
 
     submitAndPresent();
+    m_frameActive = false;
 }
 
 /**
@@ -617,7 +634,27 @@ void VulkanRenderer::recreateSwapchain() {
 
     // Recreate pipeline using new render pass & extent
     createPipeline();
+
+    // Notify registered swapchain recreation listeners
+    uint32_t extentW = swapchain.getExtent().width;
+    uint32_t extentH = swapchain.getExtent().height;
+    for (const auto& [id, callback] : m_swapchainCallbacks) {
+        if (callback) {
+            callback(extentW, extentH);
+        }
+    }
 }
+
+size_t VulkanRenderer::addSwapchainRecreatedCallback(SwapchainRecreatedCallback cb) {
+    size_t id = m_nextSwapchainCallbackId++;
+    m_swapchainCallbacks[id] = std::move(cb);
+    return id;
+}
+
+void VulkanRenderer::removeSwapchainRecreatedCallback(size_t id) {
+    m_swapchainCallbacks.erase(id);
+}
+
 
 /**
  * @brief releases allocated Vulkan resources.

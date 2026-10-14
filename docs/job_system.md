@@ -1,91 +1,176 @@
 # Multi-Threaded Job System
 
-This document outlines the architecture and execution logic of the engine's Multi-Threaded Job System. The job system provides a lightweight thread pool scheduler for distributing loop iterations and independent work units across multi-core processors.
+This document outlines the architecture, data structures, and synchronization protocols of the engine's high-performance Multi-Threaded Job System. The system provides a lock-free, cooperative task scheduler designed to maximize CPU throughput across multicore processors while eliminating lock contention and priority inversion.
 
 ---
 
-## Architecture Overview
+## 1. Architecture Overview
 
-The system is encapsulated by **[JobSystem.hpp](../engine/include/core/JobSystem.hpp)** and implemented in **[JobSystem.cpp](../engine/src/core/JobSystem.cpp)** as a thread-safe singleton. It maintains:
-1. **Worker Threads**: A vector of active system threads (`std::vector<std::thread>`).
-2. **Job Queue**: A FIFO queue (`std::queue<std::function<void()>>`) containing pending task closures.
-3. **Queue Sync**: A mutex (`std::mutex`) guarding access to the queue, and a condition variable (`std::condition_variable`) to sleep idle workers.
+The system is encapsulated by **[JobSystem.hpp](../engine/include/core/JobSystem.hpp)** and implemented in **[JobSystem.cpp](../engine/src/core/JobSystem.cpp)** as a thread-safe singleton.
+
+```mermaid
+flowchart TD
+    MainThread["Main Thread / Calling Thread"] --> Enqueue["Enqueue Job(s) (Lock-Free MPMC Ring Buffer)"]
+    Enqueue --> Sem["Counting Semaphore (std::counting_semaphore)"]
+    Sem --> W1["Worker Thread 1"]
+    Sem --> W2["Worker Thread 2"]
+    Sem --> WN["Worker Thread N"]
+    MainThread -.-> CoopWait["Cooperative Wait (Helps execute jobs from queue)"]
+    CoopWait -.-> JobHandle["JobHandle (Atomic JobCounter)"]
+    W1 --> JobHandle
+    W2 --> JobHandle
+    WN --> JobHandle
+```
+
+### Core Architecture Components
+
+1. **Lock-Free MPMC Ring Buffer**: Built on Dmitry Vyukov's bounded multi-producer multi-consumer queue algorithm with $O(1)$ enqueue and dequeue operations.
+2. **Worker Thread Pool**: Pre-allocated OS threads bound to hardware logical cores ($N-1$ worker threads by default, leaving one thread for the main engine loop).
+3. **Cooperative Semaphore Waking**: A C++20 `std::counting_semaphore` wakes sleeping workers with zero lock overhead.
+4. **Cooperative Helping on Synchronization**: When the main thread waits on a `JobHandle`, it actively steals and executes pending jobs from the queue instead of sleeping or wasting CPU cycles in spin loops.
+5. **Thread Telemetry & Diagnostics**: Native OS thread labeling (`SetThreadDescription` on Windows) and Tracy profiler instrumentation (`tracy::SetThreadName`).
 
 ---
 
-## Execution Interface
+## 2. Lock-Free Queue Mechanics (Vyukov Algorithm)
 
-### 1. Initialization & Lifecycle
-On engine startup, `JobSystem::initialize(threadCount)` is called:
-* If `threadCount` is `0`, it queries system hardware concurrency (`std::thread::hardware_concurrency()`) and spawns $N-1$ worker threads, leaving one core completely free for main thread loop operations.
-* Workers run the internal `workerThreadLoop` where they sleep until tasks are pushed to the queue.
-* On shutdown, `JobSystem::shutdown()` sets a `stop` flag, wakes up all sleeping workers, waits for them to join, and clears any remaining tasks.
+Traditional job queues protected by `std::mutex` and `std::condition_variable` suffer from severe lock contention when hundreds of small tasks are dispatched simultaneously.
 
-### 2. Job Submission
-Single tasks are pushed using `pushJob(std::function<void()> job)`:
+The engine utilizes a power-of-two bounded circular buffer (default 4096 cells):
+
 ```cpp
-void JobSystem::pushJob(std::function<void()> job) {
-    {
-        std::lock_guard<std::mutex> lock(queueMutex);
-        if (stop) return;
-        jobQueue.push(std::move(job));
+struct Cell {
+    std::atomic<size_t> sequence;
+    std::function<void()> job;
+};
+
+std::vector<Cell> buffer;
+size_t bufferMask;
+std::atomic<size_t> enqueuePos{0};
+std::atomic<size_t> dequeuePos{0};
+```
+
+### Enqueue Protocol
+1. Load `enqueuePos`.
+2. Inspect the sequence number of `buffer[enqueuePos & bufferMask]`.
+3. If `sequence == enqueuePos`, attempt an atomic compare-and-swap (`compare_exchange_weak`) on `enqueuePos`.
+4. Store the job closure, then advance `sequence` to `enqueuePos + 1` with `std::memory_order_release` to make it visible to consumers.
+5. If the cell sequence is behind (buffer full), execute a hardware spin-pause (`_mm_pause()` or `__yield()`) before yielding.
+
+### Dequeue Protocol
+1. Load `dequeuePos`.
+2. Inspect the sequence number of `buffer[dequeuePos & bufferMask]`.
+3. If `sequence == dequeuePos + 1`, attempt an atomic compare-and-swap on `dequeuePos`.
+4. Move the job out of the cell, then reset `sequence` to `dequeuePos + bufferMask + 1` with release semantics.
+5. Execute the job outside of any critical section.
+
+---
+
+## 3. Job Handles & Cooperative Waiting
+
+Tasks can be synchronized using `JobHandle`, which encapsulates a reference-counted atomic task counter:
+
+```cpp
+using JobHandle = std::shared_ptr<JobCounter>;
+
+struct JobCounter {
+    std::atomic<int> remaining{0};
+};
+```
+
+### Cooperative Wait Implementation
+
+When calling `JobSystem::wait(JobHandle handle)`:
+
+```cpp
+void JobSystem::wait(const JobHandle& handle) {
+    if (!handle) return;
+    
+    // Help execute pending jobs while waiting
+    while (handle->remaining.load(std::memory_order_acquire) > 0) {
+        if (!tryExecuteOneJob()) {
+            for (int spin = 0; spin < 64; ++spin) {
+                SPIN_PAUSE();
+            }
+            std::this_thread::yield();
+        }
     }
-    cv.notify_one();
 }
+```
+
+* **No Idle Core Waste**: The waiting thread becomes a dynamic worker, popping and executing tasks. This guarantees progress even if worker threads are temporarily preempted by the OS scheduler.
+* **Hardware Spin Backoff**: If no work is currently available in the queue, it performs low-power hardware pause instructions (`_mm_pause()` on x86/x64, `__yield()` on ARM) before yielding its timeslice.
+
+---
+
+## 4. Parallel For & Chunked Work Stealing
+
+The primary API for parallelizing data loops is `parallelFor`:
+
+```cpp
+void parallelFor(int count, std::function<void(int)> func, int chunkSize = 0);
+```
+
+### Dynamic Chunking & Atomic Contention Elimination
+
+Naive parallel loops enqueue one task per index or perform atomic increments on single indices:
+$$\text{Index} = \text{atomic.fetch\_add}(1)$$
+With thousands of elements, this causes severe atomic cache line bouncing across CPU L3 caches.
+
+The engine's `parallelFor` uses **chunked dynamic partitioning**:
+
+```cpp
+if (chunkSize <= 0) {
+    int autoChunk = std::max(1, count / static_cast<int>(numThreads * 8));
+    chunkSize = std::clamp(autoChunk, 1, 128);
+}
+
+std::atomic<int> nextIndex{0};
+auto handle = std::make_shared<JobCounter>();
+handle->remaining.store(static_cast<int>(numThreads), std::memory_order_release);
+
+for (unsigned int w = 0; w < numThreads; ++w) {
+    pushJob([&func, count, chunkSize, &nextIndex, handle]() {
+        while (true) {
+            int start = nextIndex.fetch_add(chunkSize, std::memory_order_relaxed);
+            if (start >= count) break;
+            int end = std::min(start + chunkSize, count);
+            for (int i = start; i < end; ++i) {
+                func(i);
+            }
+        }
+        handle->remaining.fetch_sub(1, std::memory_order_release);
+    });
+}
+
+wait(handle);
+```
+
+### Advantages of Dynamic Chunking
+1. **Load Balancing**: Faster cores automatically claim more chunks via `fetch_add(chunkSize)`.
+2. **Minimal Bus Contention**: Workers make $\frac{N}{\text{chunkSize}}$ atomic operations instead of $N$.
+3. **Zero Deadlock Risk**: Coordinated by the cooperative `wait()` loop.
+
+---
+
+## 5. Batch Job Enqueueing (`pushJobs`)
+
+For submitting multiple independent tasks simultaneously, `pushJobs` enqueues an entire list of jobs in a tight loop and signals the worker semaphore once, reducing kernel transition overhead:
+
+```cpp
+std::vector<std::function<void()>> batch;
+batch.reserve(tasks.size());
+for (auto& task : tasks) {
+    batch.push_back([task]() { task.run(); });
+}
+JobHandle batchHandle = jobSystem.pushJobs(batch);
+jobSystem.wait(batchHandle);
 ```
 
 ---
 
-## Parallel For Loop Partitioning
+## 6. Profiler & Debugger Integration
 
-The primary interface for parallel loop execution is:
-```cpp
-void parallelFor(int count, std::function<void(int)> func);
-```
-`parallelFor` splits a flat index loop into independent chunks executed concurrently across available threads.
-
-### 1. Work Chunking
-* If the job system contains no threads, or the loop count is $< 2$, it executes sequentially on the calling thread to avoid scheduling overhead.
-* Otherwise, the loop is partitioned into $M$ chunks (where $M = \min(\text{threads}, \text{count})$).
-* The chunk size is calculated dynamically:
-  
-  $$\text{chunk size} = \frac{\text{count} + M - 1}{M}$$
-
-* Each chunk is pushed to the job queue as a lambda capture:
-  ```cpp
-  pushJob([&func, start, end, &chunksRemaining]() {
-      for (int i = start; i < end; ++i) {
-          func(i);
-      }
-      --chunksRemaining;
-  });
-  ```
-
----
-
-## Cooperative Spin-Yield Synchronization
-
-### The Condition Variable Race Condition (Postmortem)
-In earlier versions, `parallelFor` used a stack-allocated mutex and condition variable on the calling thread to wait for background tasks:
-```cpp
-// DEPRECATED RACY APPROACH:
-std::mutex waitMutex;
-std::condition_variable waitCv;
-// Workers notified waitCv when done...
-```
-* **The Bug**: If the calling thread woke up early or finished waiting and exited the function scope, the stack frame holding the condition variable and mutex was deallocated. Any late worker thread attempting to lock the destroyed mutex or signal the destroyed condition variable triggered memory access violations or OS-level `resource deadlock would occur` exceptions.
-
-### The Lock-Free Yield-Spin Solution
-To resolve this use-after-free race condition, the synchronization was refactored to use a lock-free atomic counter and a cooperative yield loop:
-```cpp
-std::atomic<int> chunksRemaining(numChunks);
-// ... enqueue jobs ...
-
-// Spin-wait and yield thread slices until all chunks finish
-while (chunksRemaining.load(std::memory_order_relaxed) > 0) {
-    std::this_thread::yield();
-}
-```
-1. **No Stack-Allocated Sync Primitives**: The only shared synchronization state is the thread-safe `std::atomic<int> chunksRemaining` counter.
-2. **Cooperative Yielding**: Instead of hard-spinning (which consumes 100% of a CPU core), the main thread calls `std::this_thread::yield()`. This cooperatively relinquishes the calling thread's current OS time slice, giving immediate execution priority to worker threads on the same core.
-3. **Zero Deadlocks**: Once the atomic counter reaches zero, the function returns safely, eliminating all stack-corruption bugs.
+* **Windows Debugger**: Every worker thread calls `SetThreadDescription(GetCurrentThread(), L"JobWorker #X")`, allowing Visual Studio and WinDbg threads windows to display clear names instead of arbitrary thread IDs.
+* **Tracy Profiler**: Automatically registers worker threads via `tracy::SetThreadName("JobWorker #X")` for detailed flame chart analysis.
+* **Telemetry Counters**: Tracks cumulative workload metrics (`getTotalJobsSubmitted()`, `getTotalJobsExecuted()`).

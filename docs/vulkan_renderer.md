@@ -1,6 +1,6 @@
 # Vulkan Rendering Engine
 
-This document details the graphics architecture of the Vulkan Renderer. The renderer is designed to abstract raw Vulkan API complexity into clean, RAII C++ wrapper classes while preserving performance, supporting instanced drawing, Cascaded Shadow Maps (CSM), compute shader passes, Screen-Space Ambient Occlusion (SSAO), and a modular post-processing pipeline.
+This document details the graphics architecture of the Vulkan Renderer. The renderer is designed to abstract raw Vulkan API complexity into clean, RAII C++ wrapper classes while preserving maximum performance, supporting instanced drawing, Cascaded Shadow Maps (CSM), compute shader passes, Screen-Space Ambient Occlusion (SSAO), a modular post-processing pipeline, and robust frame lifecycle synchronization.
 
 ![Vulkan Layer](diagrams/out/vulkan_layer/VulkanLayer.png)
 
@@ -21,24 +21,52 @@ Vulkan requires explicit declaration of resources, layouts, synchronization, and
 
 ---
 
-## 2. Double-Buffered Frame Synchronization
+## 2. Frame Lifecycle State Machine & Synchronization
 
-To prevent the CPU from submitting draw commands faster than the GPU can process them, the engine coordinates double-buffering using [VulkanFrameSync.hpp](../engine/src/core/VulkanFrameSync.hpp):
+In production environments, OS events such as window minimizing (0x0 extent), drag-resizing, display adapter unplugging, or full-screen toggling can trigger swapchain invalidation (`VK_ERROR_OUT_OF_DATE_KHR` or `VK_SUBOPTIMAL_KHR`). Submitting draw commands to an invalid or un-acquired swapchain causes Vulkan driver crashes and device loss (`VK_ERROR_DEVICE_LOST`).
 
-```cpp
-struct VulkanFrameSync {
-    std::vector<VkSemaphore> imageAvailableSemaphores; // GPU-GPU: image is ready for rendering
-    std::vector<VkSemaphore> renderFinishedSemaphores; // GPU-GPU: rendering completed, ready to present
-    std::vector<VkFence>     inFlightFences;           // CPU-GPU: CPU waits for frame to finish on GPU
-};
+The engine enforces a rigorous frame state machine in [VulkanRenderer.cpp](../engine/src/VulkanRenderer.cpp):
+
+```mermaid
+stateDiagram-v2
+    [*] --> Idle
+    Idle --> Minimized: Window extent is 0x0
+    Minimized --> Idle: Window restored
+    Idle --> Acquired: beginFrame() -> vkAcquireNextImageKHR OK
+    Idle --> OutOfDate: vkAcquireNextImageKHR -> OUT_OF_DATE / SUBOPTIMAL
+    OutOfDate --> Idle: recreateSwapChain() + Dispatch Callbacks
+    Acquired --> Recording: Record Shadow, Forward, Post-Process, UI
+    Recording --> Submitted: endFrame() -> vkQueueSubmit
+    Submitted --> Presented: vkQueuePresentKHR
+    Presented --> Idle
 ```
 
-### The Render Loop Sync Protocol
-1.  **Wait for Frame Fence**: Wait on `inFlightFence` (`vkWaitForFences`) to guarantee GPU completion of the target frame slot.
-2.  **Acquire Next Image**: Request swapchain image using `vkAcquireNextImageKHR` with `imageAvailableSemaphore`.
-3.  **Reset Fence**: `vkResetFences` to lock the current slot.
-4.  **Submit Command Buffer**: Submit recorded commands (`vkQueueSubmit`), waiting on `imageAvailableSemaphore` and signaling `renderFinishedSemaphore`.
-5.  **Present Image**: Call `vkQueuePresentKHR`, waiting on `renderFinishedSemaphore`.
+### Lifecycle Guarantees (`beginFrame` & `endFrame`)
+
+1. **Minimized Window Protection**:
+   ```cpp
+   int width = 0, height = 0;
+   glfwGetFramebufferSize(context->getWindow(), &width, &height);
+   if (width == 0 || height == 0) {
+       return false; // Skip drawing, do not record or submit invalid frames
+   }
+   ```
+2. **Atomic Frame Activity Guard (`m_frameActive`)**:
+   `beginFrame()` returns a `bool`. If image acquisition fails or the window is minimized, `m_frameActive` remains `false`. `endFrame()` verifies this flag and safely aborts if no frame was actively begun.
+3. **Double-Buffered CPU-GPU Synchronization**:
+   ```cpp
+   vkWaitForFences(device->getLogicalDevice(), 1, &sync->inFlightFences[currentFrame], VK_TRUE, UINT64_MAX);
+   // Image acquisition with imageAvailableSemaphore
+   // Only reset fence AFTER successful acquisition
+   vkResetFences(device->getLogicalDevice(), 1, &sync->inFlightFences[currentFrame]);
+   ```
+4. **Swapchain Recreation Event Dispatch**:
+   Subsystems that maintain resolution-dependent framebuffers (e.g., Post-Process Pipeline, SSAO, Scene Viewport, UI cameras) register recreation listeners:
+   ```cpp
+   renderer.addSwapchainRecreatedCallback([](uint32_t width, uint32_t height) {
+       // Resize HDR offscreen render targets and camera aspect ratios
+   });
+   ```
 
 ---
 
@@ -59,7 +87,7 @@ graph TD
 ```
 
 ### 1. Cascaded Shadow Mapping (CSM)
-* **Frustum Splitting**: Slices camera frustum into up to 4 cascades using a practical logarithmic/uniform split lambda (\(\lambda = 0.85\)).
+* **Frustum Splitting**: Slices camera frustum into up to 4 cascades using a practical logarithmic/uniform split lambda ($\lambda = 0.85$).
 * **Filtering**: 16-tap Poisson disk filtering or 3x3 PCF eliminates harsh shadow stair-stepping.
 * **Biasing**: Normal-offset geometric bias prevents shadow acne and detached shadows.
 
@@ -69,12 +97,11 @@ graph TD
 
 ### 3. Compute Shader Infrastructure
 * The engine natively supports compute pipelines (`VK_PIPELINE_BIND_POINT_COMPUTE`).
-* Powers Skymo's real-time atmospheric scattering LUTs (Transmittance, Multi-Scattering, SkyView, 3D Aerial Perspective, and 3D Cloud Noise).
+* Powers real-time atmospheric scattering LUTs (Transmittance, Multi-Scattering, SkyView, 3D Aerial Perspective, and 3D Cloud Noise).
 
 ### 4. Post-Processing Pipeline (`PostProcessPipeline`)
 * Chain of fullscreen fragment passes operating on HDR offscreen color buffers.
-* Supports photographic tonemapping (ACES, AgX, Filmic, Reinhard), custom fullscreen effects (grayscale, pixelate), and retro downsampling with nearest-neighbor upscaling.
-* *Read more: [Post-Processing & Shaders Guide](post_process_and_shaders.md)*
+* Supports photographic tonemapping (ACES, AgX, Filmic, Reinhard), custom fullscreen effects, and retro downsampling with nearest-neighbor upscaling.
 
 ---
 
@@ -101,8 +128,12 @@ struct PushConstants {
 };
 ```
 
-### The Batch Drawing Loop
-1.  **Group Entities**: Groups active renderables into batches sharing identical `Mesh*` and `Material*`.
-2.  **Bind Pipeline & Descriptors**: Binds pipeline and global Camera uniform buffer once per batch.
-3.  **Bind Vertex/Index Buffers**: Binds VBO and IBO once per batch.
-4.  **Draw Instances**: For each entity in the batch, updates push constants and executes `vkCmdDrawIndexed`.
+---
+
+## 6. Rendering Performance Metrics (`RenderMetrics`)
+
+The renderer gathers per-frame metrics accessible via `renderer.getMetrics()`:
+* **Draw Calls**: Number of `vkCmdDraw` and `vkCmdDrawIndexed` submissions in the current frame.
+* **Triangle Count**: Total primitive count rasterized.
+* **Vertex Count**: Total vertices processed.
+* **Frame Index**: Monotonically increasing frame identifier for temporal effects and jittering.

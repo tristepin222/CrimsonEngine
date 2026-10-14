@@ -28,8 +28,11 @@
 class AnimationSystem : public System {
 public:
     const char* getName() const override { return "AnimationSystem"; }
+    SystemStage getStage() const override { return SystemStage::Update; }
+    bool isParallelSafe() const override { return true; }
     AnimationSystem(Registry& reg, VulkanRenderer& renderer, EditorModeState& editorMode)
         : registry(reg), renderer(renderer), editorMode(editorMode) {}
+
 
         /**
          * @brief Updates skeletal poses for all animated entities.

@@ -22,6 +22,9 @@
  */
 class CameraSystem : public System {
 public:
+    const char* getName() const override { return "CameraSystem"; }
+    SystemStage getStage() const override { return SystemStage::PostUpdate; }
+
     /**
      * @brief Construct a new Camera System object.
      * @param reg Reference to the ECS Registry.
@@ -30,6 +33,7 @@ public:
      */
     CameraSystem(Registry& reg, VulkanRenderer& renderer, EditorModeState& editorMode)
         : registry(reg), renderer(renderer), editorMode(editorMode) {}
+
 
     /**
      * @brief Updates the camera's rotation, movement, aspect ratio, and view-projection matrices.

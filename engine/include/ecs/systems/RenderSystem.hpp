@@ -31,6 +31,7 @@
 class RenderSystem : public System {
 public:
     const char* getName() const override { return "RenderSystem"; }
+    SystemStage getStage() const override { return SystemStage::Render; }
     /**
      * @brief Construct a new Render System object and subscribes to component add/remove events.
      * @param reg Reference to the ECS Registry.
@@ -74,9 +75,10 @@ public:
      * @param overlayPass Optional callback function to execute additional rendering (e.g. ImGui) during the frame.
      */
     void drawFrame(const std::function<void(VkCommandBuffer)>& overlayPass = {}) {
-        renderer.beginFrame(nullptr);
+        if (!renderer.beginFrame(nullptr)) return;
 
         VkCommandBuffer cmd = renderer.getCurrentCommandBuffer();
+
 
         // --- Collect active light info ---
         glm::vec4 ambientLight = glm::vec4(1.0f, 1.0f, 1.0f, 1.0f); // Renderer fallback sun as ambient fill

@@ -6,7 +6,22 @@
 #include <memory>
 #include <limits>
 #include <cstdint>
+#include <string>
 #include <thread>
+
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
+#if defined(TRACY_ENABLE)
+#include <tracy/Tracy.hpp>
+#endif
 
 #if defined(_MSC_VER)
 #include <intrin.h>
@@ -51,7 +66,7 @@ namespace Engine {
         stop.store(false, std::memory_order_release);
         workers.reserve(threadCount);
         for (unsigned int i = 0; i < threadCount; ++i) {
-            workers.emplace_back(&JobSystem::workerThreadLoop, this);
+            workers.emplace_back(&JobSystem::workerThreadLoop, this, i);
         }
 
         initialized.store(true, std::memory_order_release);
@@ -86,8 +101,28 @@ namespace Engine {
         shutdown();
     }
 
-    void JobSystem::pushJob(std::function<void()> job) {
-        if (stop.load(std::memory_order_acquire)) return;
+    JobHandle JobSystem::pushJob(std::function<void()> job) {
+        auto handle = std::make_shared<JobCounter>();
+        handle->remaining.store(1, std::memory_order_release);
+
+        if (stop.load(std::memory_order_acquire)) {
+            handle->remaining.store(0, std::memory_order_release);
+            return handle;
+        }
+
+        auto wrappedJob = [this, job = std::move(job), handle]() {
+            if (job) {
+                try {
+                    job();
+                } catch (const std::exception& e) {
+                    std::cerr << "[JobSystem] Job execution caught exception: " << e.what() << std::endl;
+                } catch (...) {
+                    std::cerr << "[JobSystem] Job execution caught unknown exception." << std::endl;
+                }
+            }
+            handle->remaining.fetch_sub(1, std::memory_order_release);
+            totalJobsExecuted.fetch_add(1, std::memory_order_relaxed);
+        };
 
         size_t pos = enqueuePos.load(std::memory_order_relaxed);
         while (true) {
@@ -96,12 +131,11 @@ namespace Engine {
             intptr_t diff = static_cast<intptr_t>(seq) - static_cast<intptr_t>(pos);
             if (diff == 0) {
                 if (enqueuePos.compare_exchange_weak(pos, pos + 1, std::memory_order_relaxed)) {
-                    cell->job = std::move(job);
+                    cell->job = std::move(wrappedJob);
                     cell->sequence.store(pos + 1, std::memory_order_release);
                     break;
                 }
             } else if (diff < 0) {
-                // Queue is full! Spin and pause before loading again.
                 for (int spin = 0; spin < 64; ++spin) {
                     SPIN_PAUSE();
                 }
@@ -114,6 +148,73 @@ namespace Engine {
 
         // Wake a worker without locking
         jobSemaphore.release();
+        return handle;
+    }
+
+    JobHandle JobSystem::pushJobs(const std::vector<std::function<void()>>& jobs) {
+        auto handle = std::make_shared<JobCounter>();
+        handle->remaining.store(static_cast<int>(jobs.size()), std::memory_order_release);
+
+        if (stop.load(std::memory_order_acquire) || jobs.empty()) {
+            handle->remaining.store(0, std::memory_order_release);
+            return handle;
+        }
+
+        for (const auto& job : jobs) {
+            auto wrappedJob = [this, job, handle]() {
+                if (job) {
+                    try {
+                        job();
+                    } catch (const std::exception& e) {
+                        std::cerr << "[JobSystem] Job execution caught exception: " << e.what() << std::endl;
+                    } catch (...) {
+                        std::cerr << "[JobSystem] Job execution caught unknown exception." << std::endl;
+                    }
+                }
+                handle->remaining.fetch_sub(1, std::memory_order_release);
+                totalJobsExecuted.fetch_add(1, std::memory_order_relaxed);
+            };
+
+            size_t pos = enqueuePos.load(std::memory_order_relaxed);
+            while (true) {
+                Cell* cell = &buffer[pos & bufferMask];
+                size_t seq = cell->sequence.load(std::memory_order_acquire);
+                intptr_t diff = static_cast<intptr_t>(seq) - static_cast<intptr_t>(pos);
+                if (diff == 0) {
+                    if (enqueuePos.compare_exchange_weak(pos, pos + 1, std::memory_order_relaxed)) {
+                        cell->job = std::move(wrappedJob);
+                        cell->sequence.store(pos + 1, std::memory_order_release);
+                        break;
+                    }
+                } else if (diff < 0) {
+                    for (int spin = 0; spin < 64; ++spin) {
+                        SPIN_PAUSE();
+                    }
+                    std::this_thread::yield();
+                    pos = enqueuePos.load(std::memory_order_relaxed);
+                } else {
+                    pos = enqueuePos.load(std::memory_order_relaxed);
+                }
+            }
+        }
+
+        jobSemaphore.release(static_cast<int>(jobs.size()));
+        return handle;
+    }
+
+    void JobSystem::wait(const JobHandle& handle) {
+        if (!handle) return;
+        while (!handle->isComplete()) {
+            if (tryExecuteOneJob()) {
+                continue;
+            }
+            SPIN_PAUSE();
+            std::this_thread::yield();
+        }
+    }
+
+    bool JobSystem::isComplete(const JobHandle& handle) const {
+        return !handle || handle->isComplete();
     }
 
     bool JobSystem::tryExecuteOneJob() {
@@ -150,40 +251,74 @@ namespace Engine {
         return true;
     }
 
-    void JobSystem::parallelFor(int count, std::function<void(int)> func) {
+    void JobSystem::parallelFor(int count, std::function<void(int)> func, int chunkSize) {
         if (count <= 0) return;
-        unsigned int numThreads = workers.size();
+        unsigned int numThreads = static_cast<unsigned int>(workers.size());
 
         if (numThreads == 0 || count < 2) {
             for (int i = 0; i < count; ++i) func(i);
             return;
         }
 
+        if (chunkSize <= 0) {
+            int autoChunk = std::max(1, count / static_cast<int>(numThreads * 8));
+            chunkSize = std::clamp(autoChunk, 1, 128);
+        }
+
         std::atomic<int> nextIndex{0};
-        std::atomic<int> workersRemaining(static_cast<int>(numThreads));
+        auto handle = std::make_shared<JobCounter>();
+        handle->remaining.store(static_cast<int>(numThreads), std::memory_order_release);
 
         for (unsigned int w = 0; w < numThreads; ++w) {
-            pushJob([&func, count, &nextIndex, &workersRemaining]() {
+            auto workerTask = [&func, count, chunkSize, &nextIndex, handle]() {
                 while (true) {
-                    int i = nextIndex.fetch_add(1, std::memory_order_relaxed);
-                    if (i >= count) break;
-                    func(i);
+                    int start = nextIndex.fetch_add(chunkSize, std::memory_order_relaxed);
+                    if (start >= count) break;
+                    int end = std::min(start + chunkSize, count);
+                    for (int i = start; i < end; ++i) {
+                        func(i);
+                    }
                 }
-                --workersRemaining;
-            });
+                handle->remaining.fetch_sub(1, std::memory_order_release);
+            };
+
+            size_t pos = enqueuePos.load(std::memory_order_relaxed);
+            while (true) {
+                Cell* cell = &buffer[pos & bufferMask];
+                size_t seq = cell->sequence.load(std::memory_order_acquire);
+                intptr_t diff = static_cast<intptr_t>(seq) - static_cast<intptr_t>(pos);
+                if (diff == 0) {
+                    if (enqueuePos.compare_exchange_weak(pos, pos + 1, std::memory_order_relaxed)) {
+                        cell->job = std::move(workerTask);
+                        cell->sequence.store(pos + 1, std::memory_order_release);
+                        break;
+                    }
+                } else if (diff < 0) {
+                    for (int spin = 0; spin < 64; ++spin) {
+                        SPIN_PAUSE();
+                    }
+                    std::this_thread::yield();
+                    pos = enqueuePos.load(std::memory_order_relaxed);
+                } else {
+                    pos = enqueuePos.load(std::memory_order_relaxed);
+                }
+            }
+            jobSemaphore.release();
         }
 
-        // Wait loop: main thread helps execute queued jobs while waiting for workers to complete
-        while (workersRemaining.load(std::memory_order_acquire) > 0) {
-            if (tryExecuteOneJob()) {
-                continue;
-            }
-            SPIN_PAUSE();
-            std::this_thread::yield();
-        }
+        wait(handle);
     }
 
-    void JobSystem::workerThreadLoop() {
+    void JobSystem::workerThreadLoop(unsigned int threadIndex) {
+#if defined(_WIN32)
+        std::wstring wname = L"JobWorker #" + std::to_wstring(threadIndex);
+        SetThreadDescription(GetCurrentThread(), wname.c_str());
+#endif
+#if defined(TRACY_ENABLE)
+        std::string tracyName = "JobWorker #" + std::to_string(threadIndex);
+        tracy::SetThreadName(tracyName.c_str());
+#endif
+
         while (true) {
             // Wait until a job becomes available or shutdown is signaled
             jobSemaphore.acquire();
@@ -199,3 +334,4 @@ namespace Engine {
     }
 
 } // namespace Engine
+

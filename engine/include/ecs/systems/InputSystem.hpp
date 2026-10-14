@@ -14,6 +14,8 @@
  */
 class InputSystem : public System {
 public:
+    const char* getName() const override { return "InputSystem"; }
+    SystemStage getStage() const override { return SystemStage::PreUpdate; }
     /**
      * @brief Construct a new Input System object.
      * @param reg Reference to the ECS Registry.
@@ -23,6 +25,7 @@ public:
     InputSystem(Registry& reg, VulkanRenderer& renderer, EditorModeState& editorMode)
         : registry(reg), renderer(renderer), editorMode(editorMode) {
     }
+
 
     /**
      * @brief Updates inputs for entities and handles cursor mode switches.

@@ -1,14 +1,71 @@
 #pragma once
 #include "EntityManager.hpp"
 #include "ComponentStorage.hpp"
+#include "core/JobSystem.hpp"
 #include <unordered_map>
 #include <typeindex>
 #include <functional>
 #include <vector>
+#include <array>
 #include <memory>
 
 #include "core/EngineAPI.hpp"
 #include "profiler/Profiler.hpp"
+
+class Registry;
+
+/**
+ * @class EntityCommandBuffer
+ * @brief Records entity and component mutation commands for safe deferred playback.
+ * Prevents iterator invalidation during View iterations or multithreaded system passes.
+ */
+class EntityCommandBuffer {
+public:
+    EntityCommandBuffer() = default;
+
+    /**
+     * @brief Defers destruction of an entity.
+     * @param e Entity to destroy.
+     */
+    void destroyEntity(Entity e);
+
+    /**
+     * @brief Defers addition or replacement of a component on an entity.
+     */
+    template<typename T>
+    void addComponent(Entity e, T comp);
+
+    /**
+     * @brief Defers removal of a component from an entity.
+     */
+    template<typename T>
+    void removeComponent(Entity e);
+
+    /**
+     * @brief Defers toggling active state of an entity.
+     */
+    void setActive(Entity e, bool active);
+
+    /**
+     * @brief Plays back all recorded commands against the target registry and clears the buffer.
+     * @param reg Target registry.
+     */
+    void execute(Registry& reg);
+
+    /**
+     * @brief Clears pending commands without executing.
+     */
+    void clear() {
+        commands.clear();
+    }
+
+
+    bool empty() const { return commands.empty(); }
+    size_t size() const { return commands.size(); }
+
+private:
+    std::vector<std::function<void(Registry&)>> commands;
+};
 
 // Simple runtime component type id registry
 /**
@@ -82,8 +139,8 @@ public:
         for (auto id : aliveCopy) {
             destroy(entities.getEntity(id));
         }
-        for (auto& s : storages) {
-            s.reset();
+        for (size_t i = 0; i < MAX_COMPONENTS; ++i) {
+            storages[i].reset();
         }
     }
 
@@ -266,6 +323,41 @@ public:
     }
 
     /**
+     * @brief Const overload: retrieves const pointer to a component of type T on an entity.
+     * @tparam T Component type.
+     * @param e Target entity.
+     * @return Const pointer to the component, or nullptr if not found.
+     */
+    template<typename T>
+    const T* get(Entity e) const {
+        const auto* storage = getStorage<T>();
+        if (!storage || !storage->has(e)) return nullptr;
+        return &storage->get(e);
+    }
+
+    /**
+     * @brief Non-throwing pointer lookup for component of type T on an entity.
+     * @tparam T Component type.
+     * @param e Target entity.
+     * @return Pointer or nullptr.
+     */
+    template<typename T>
+    T* tryGet(Entity e) {
+        return get<T>(e);
+    }
+
+    /**
+     * @brief Const non-throwing pointer lookup for component of type T on an entity.
+     * @tparam T Component type.
+     * @param e Target entity.
+     * @return Const pointer or nullptr.
+     */
+    template<typename T>
+    const T* tryGet(Entity e) const {
+        return get<T>(e);
+    }
+
+    /**
      * @brief Retrieves a reference to a component of type T on an entity. Throws if missing.
      * @tparam T Component type.
      * @param e Target entity.
@@ -279,6 +371,33 @@ public:
     }
 
     /**
+     * @brief Const overload: retrieves const reference to component of type T on an entity. Throws if missing.
+     * @tparam T Component type.
+     * @param e Target entity.
+     * @return Const reference to the component.
+     */
+    template<typename T>
+    const T& getRef(Entity e) const {
+        const T* ptr = get<T>(e);
+        if (!ptr) throw std::runtime_error("Component missing!");
+        return *ptr;
+    }
+
+    /**
+     * @brief Returns the total count of currently alive entities.
+     */
+    size_t getAliveCount() const {
+        return entities.getAliveCount();
+    }
+
+    /**
+     * @brief Pre-allocates entity pool capacity.
+     */
+    void reserve(size_t capacity) {
+        entities.reserve(capacity);
+    }
+
+    /**
      * @brief Checks if an entity possesses a component of type T.
      * @tparam T Component type.
      * @param e Target entity.
@@ -288,7 +407,7 @@ public:
     bool has(Entity e) const {
         std::size_t id = getComponentTypeId<T>();
         if (id >= MAX_COMPONENTS || !storages[id]) return false;
-        return static_cast<ComponentStorage<T>*>(storages[id].get())->has(e);
+        return static_cast<const ComponentStorage<T>*>(storages[id].get())->has(e);
     }
 
     /**
@@ -387,6 +506,47 @@ public:
             return Iterator{ registry, ents, ents.size(), mask };
         }
 
+        /**
+         * @brief Direct lambda evaluation over all matching entities without iterator construction.
+         * @tparam Func Invocable with signature void(Entity, Components&...)
+         */
+        template<typename Func>
+        void each(Func&& func) {
+            if (!smallest) return;
+            const auto& ents = smallest->getEntities();
+            for (size_t i = 0; i < ents.size(); ++i) {
+                Entity e = ents[i];
+                if (e.getId() != Entity::INVALID_ENTITY && registry.isValid(e) && registry.isActive(e)) {
+                    if ((registry.getMask(e) & mask) == mask) {
+                        func(e, *registry.get<Components>(e)...);
+                    }
+                }
+            }
+        }
+
+        /**
+         * @brief Multi-threaded execution across worker threads using JobSystem.
+         * @param jobSystem Active JobSystem reference.
+         * @param func Invocable with signature void(Entity, Components&...).
+         * @param chunkSize Iteration batch size. If <= 0, automatically computed.
+         */
+        template<typename Func>
+        void eachParallel(Engine::JobSystem& jobSystem, Func&& func, int chunkSize = 0) {
+            if (!smallest) return;
+            const auto& ents = smallest->getEntities();
+            int count = static_cast<int>(ents.size());
+            if (count == 0) return;
+
+            jobSystem.parallelFor(count, [&](int i) {
+                Entity e = ents[i];
+                if (e.getId() != Entity::INVALID_ENTITY && registry.isValid(e) && registry.isActive(e)) {
+                    if ((registry.getMask(e) & mask) == mask) {
+                        func(e, *registry.get<Components>(e)...);
+                    }
+                }
+            }, chunkSize);
+        }
+
     private:
         Registry& registry;
         IStorage* smallest;
@@ -406,6 +566,7 @@ public:
         (mask.set(getComponentTypeId<Components>()), ...);
         return View<Components...>(*this, smallest, mask);
     }
+
 
 private:
     /** @brief Entity lifetime manager. */
@@ -443,6 +604,18 @@ private:
     }
 
     /**
+     * @brief Const overload: retrieves storage class for component type.
+     * @tparam T Component type.
+     * @return Const typed storage pointer, or nullptr if none.
+     */
+    template<typename T>
+    const ComponentStorage<T>* getStorage() const {
+        std::size_t id = getComponentTypeId<T>();
+        if (id >= MAX_COMPONENTS) return nullptr;
+        return static_cast<const ComponentStorage<T>*>(storages[id].get());
+    }
+
+    /**
      * @brief Ensures all given component type storages exist.
      * @tparam Components Pack of component types.
      */
@@ -473,3 +646,38 @@ private:
         return (a->size() < b->size()) ? a : b;
     }
 };
+
+inline void EntityCommandBuffer::destroyEntity(Entity e) {
+    commands.push_back([e](Registry& reg) {
+        reg.destroy(e);
+    });
+}
+
+template<typename T>
+inline void EntityCommandBuffer::addComponent(Entity e, T comp) {
+    commands.push_back([e, c = std::move(comp)](Registry& reg) mutable {
+        reg.emplace_or_replace<T>(e, std::move(c));
+    });
+}
+
+template<typename T>
+inline void EntityCommandBuffer::removeComponent(Entity e) {
+    commands.push_back([e](Registry& reg) {
+        reg.remove<T>(e);
+    });
+}
+
+inline void EntityCommandBuffer::setActive(Entity e, bool active) {
+    commands.push_back([e, active](Registry& reg) {
+        reg.setActive(e, active);
+    });
+}
+
+inline void EntityCommandBuffer::execute(Registry& reg) {
+    for (auto& cmd : commands) {
+        cmd(reg);
+    }
+    commands.clear();
+}
+
+

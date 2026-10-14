@@ -1,9 +1,9 @@
 #pragma once
 #include "Entity.hpp"
 #include <vector>
-#include <array>
 #include <cstdint>
 #include <stdexcept>
+#include <algorithm>
 
 // Base interface
 /**
@@ -35,17 +35,27 @@ struct IStorage {
 
 /**
  * @class ComponentStorage
- * @brief High-performance Sparse Set component storage with contiguous memory layout and O(1) lookups.
+ * @brief High-performance Sparse Set component storage with contiguous dense data layout and dynamic scaling.
  * @tparam T Type of component being stored.
  */
 template<typename T>
 class ComponentStorage : public IStorage {
 public:
-    static constexpr std::uint32_t MAX_ENTITIES = 10000;
     static constexpr std::uint32_t INVALID_INDEX = 0xFFFFFFFF;
+    /** @brief Maintained for backwards compatibility. Dynamic scaling removes hard limits. */
+    static constexpr std::uint32_t MAX_ENTITIES = 10000;
 
-    ComponentStorage() {
-        sparse.fill(INVALID_INDEX);
+    ComponentStorage() = default;
+
+    /**
+     * @brief Pre-allocates sparse and dense capacity.
+     */
+    void reserve(size_t capacity) {
+        if (capacity > sparse.size()) {
+            sparse.resize(capacity, INVALID_INDEX);
+        }
+        data.reserve(capacity);
+        entities.reserve(capacity);
     }
 
     /**
@@ -55,7 +65,12 @@ public:
      */
     void add(Entity e, T comp) {
         std::uint32_t id = e.getId();
-        if (id >= MAX_ENTITIES) return;
+        if (id == Entity::INVALID_ENTITY) return;
+
+        if (id >= sparse.size()) {
+            size_t newSize = std::max<size_t>(id + 1, sparse.empty() ? 64 : sparse.size() * 2);
+            sparse.resize(newSize, INVALID_INDEX);
+        }
 
         std::uint32_t denseIdx = sparse[id];
         if (denseIdx != INVALID_INDEX) {
@@ -77,7 +92,7 @@ public:
      */
     bool has(Entity e) const {
         std::uint32_t id = e.getId();
-        return id < MAX_ENTITIES && sparse[id] != INVALID_INDEX && entities[sparse[id]] == e;
+        return id < sparse.size() && sparse[id] != INVALID_INDEX && entities[sparse[id]] == e;
     }
 
     /**
@@ -86,7 +101,7 @@ public:
      */
     void remove(Entity e) {
         std::uint32_t id = e.getId();
-        if (id >= MAX_ENTITIES || sparse[id] == INVALID_INDEX) return;
+        if (id >= sparse.size() || sparse[id] == INVALID_INDEX) return;
 
         std::uint32_t index = sparse[id];
         std::uint32_t last = static_cast<std::uint32_t>(data.size() - 1);
@@ -118,10 +133,45 @@ public:
      */
     T& get(Entity e) {
         std::uint32_t id = e.getId();
-        if (id >= MAX_ENTITIES || sparse[id] == INVALID_INDEX) {
+        if (id >= sparse.size() || sparse[id] == INVALID_INDEX) {
             throw std::runtime_error("Component missing for target entity!");
         }
         return data[sparse[id]];
+    }
+
+    /**
+     * @brief Const overload: retrieves const reference to component associated with an entity.
+     * @param e The target entity.
+     * @return Const reference to component instance.
+     */
+    const T& get(Entity e) const {
+        std::uint32_t id = e.getId();
+        if (id >= sparse.size() || sparse[id] == INVALID_INDEX) {
+            throw std::runtime_error("Component missing for target entity!");
+        }
+        return data[sparse[id]];
+    }
+
+    /**
+     * @brief Non-throwing component lookup. Returns pointer or nullptr if missing.
+     * @param e The target entity.
+     * @return Pointer to component instance or nullptr.
+     */
+    T* tryGet(Entity e) {
+        std::uint32_t id = e.getId();
+        if (id >= sparse.size() || sparse[id] == INVALID_INDEX) return nullptr;
+        return &data[sparse[id]];
+    }
+
+    /**
+     * @brief Const non-throwing component lookup. Returns const pointer or nullptr if missing.
+     * @param e The target entity.
+     * @return Const pointer to component instance or nullptr.
+     */
+    const T* tryGet(Entity e) const {
+        std::uint32_t id = e.getId();
+        if (id >= sparse.size() || sparse[id] == INVALID_INDEX) return nullptr;
+        return &data[sparse[id]];
     }
 
     /**
@@ -133,21 +183,44 @@ public:
     }
 
     /**
-     * @brief Returns the size of the storage.
+     * @brief Returns the number of component instances stored.
      * @return Element count.
      */
     size_t size() const override { return data.size(); }
 
+    /**
+     * @brief Checks if storage has no elements.
+     */
+    bool empty() const { return data.empty(); }
+
+    /**
+     * @brief Clears all components and entities.
+     */
+    void clear() {
+        data.clear();
+        entities.clear();
+        std::fill(sparse.begin(), sparse.end(), INVALID_INDEX);
+    }
+
+    /** @brief Direct contiguous buffer access for SIMD / batch operations. */
+    T* rawData() { return data.data(); }
+    const T* rawData() const { return data.data(); }
+
     auto begin() { return data.begin(); }
     auto end() { return data.end(); }
+    auto begin() const { return data.begin(); }
+    auto end() const { return data.end(); }
+
     auto entityBegin() { return entities.begin(); }
     auto entityEnd() { return entities.end(); }
+    auto entityBegin() const { return entities.begin(); }
+    auto entityEnd() const { return entities.end(); }
 
 private:
     /** @brief Contiguous array of component instances. */
     std::vector<T> data;
     /** @brief Dense array of entities matching data vector order. */
     std::vector<Entity> entities;
-    /** @brief Fixed-size sparse array mapping Entity ID -> Dense index for O(1) access. */
-    std::array<std::uint32_t, MAX_ENTITIES> sparse;
+    /** @brief Dynamically scalable sparse array mapping entity ID to dense index. */
+    std::vector<std::uint32_t> sparse;
 };

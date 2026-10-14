@@ -12,9 +12,13 @@
  */
 class PlayerControllerSystem : public System {
 public:
+    const char* getName() const override { return "PlayerControllerSystem"; }
+    SystemStage getStage() const override { return SystemStage::Update; }
+
     PlayerControllerSystem(Registry& reg, VulkanRenderer& renderer, EditorModeState& editorMode);
 
     void update(float dt) override;
+
 
 private:
     Registry& registry;

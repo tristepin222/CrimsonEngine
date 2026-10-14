@@ -182,12 +182,54 @@ public:
     /**
      * @brief Starts render pass recording for the current frame.
      * @param prePass Optional callback executed on command buffer before vkCmdBeginRenderPass (e.g. for compute passes).
+     * @return True if image acquisition succeeded and frame recording started; false if swapchain was out-of-date or window minimized.
      */
-    void beginFrame(const std::function<void(VkCommandBuffer)>& prePass = {});
+    bool beginFrame(const std::function<void(VkCommandBuffer)>& prePass = {});
+    /**
+     * @brief Checks if a frame is currently actively recording commands.
+     */
+    bool isFrameActive() const { return m_frameActive; }
+
+    using SwapchainRecreatedCallback = std::function<void(uint32_t width, uint32_t height)>;
+
+    /**
+     * @brief Registers a listener invoked whenever the swapchain is resized or recreated.
+     * @param cb Callback receiving new framebuffer width and height.
+     * @return Unique callback registration ID.
+     */
+    size_t addSwapchainRecreatedCallback(SwapchainRecreatedCallback cb);
+
+    /**
+     * @brief Unregisters a swapchain recreation callback by ID.
+     */
+    void removeSwapchainRecreatedCallback(size_t id);
+
+    /**
+     * @struct RenderMetrics
+     * @brief Frame performance and GPU drawing counters.
+     */
+    struct RenderMetrics {
+        uint32_t drawCalls{0};
+        uint32_t instancesDrawn{0};
+        uint32_t trianglesDrawn{0};
+        uint32_t shadowPasses{0};
+    };
+
+    /**
+     * @brief Retrieves active frame drawing metrics.
+     */
+    const RenderMetrics& getMetrics() const { return m_metrics; }
+
+    /**
+     * @brief Resets frame metrics counters at the start of a frame.
+     */
+    void resetMetrics() { m_metrics = {}; }
+
     /**
      * @brief Submits command buffers and presents the rendered swapchain image.
      */
     void endFrame();
+
 
     /**
      * @brief Submits draw commands for a single mesh.
@@ -786,4 +828,10 @@ private:
     void createCommandsAndSync();
     /** @brief Submits command buffers to graphic queue and schedules screen presentation. */
     void submitAndPresent();
+
+    bool m_frameActive = false;
+    RenderMetrics m_metrics{};
+    std::unordered_map<size_t, SwapchainRecreatedCallback> m_swapchainCallbacks;
+    size_t m_nextSwapchainCallbackId = 1;
 };
+

@@ -751,6 +751,8 @@ namespace Engine {
             if (!editorMode.isPlaying && config.enableEditor) {
                 systemManager.updateEditorAll(dt);
             }
+            systemManager.flushCommandBuffer(registry);
+
 
             if (uiSystem) {
                 uiSystem->setEditorActive(config.enableEditor);
