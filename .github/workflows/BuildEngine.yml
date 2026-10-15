@@ -92,7 +92,8 @@ jobs:
       - name: Install Vulkan SDK
         uses: jakoch/install-vulkan-sdk-action@v1
         with:
-          version: 'latest'
+          vulkan_version: 'latest'
+          install_runtime: true
           cache: true
 
       - name: Configure CMake
@@ -102,6 +103,18 @@ jobs:
       - name: Build
         run: |
           cmake --build build --config Release --parallel
+
+      - name: Ensure Vulkan Runtime DLL
+        shell: powershell
+        run: |
+          $vkDll = Get-ChildItem -Path "C:\VulkanSDK" -Filter "vulkan-1.dll" -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.FullName -match 'x64|runtime' } | Select-Object -First 1
+          if ($vkDll) {
+              Write-Host "Found Vulkan Runtime DLL: $($vkDll.FullName)"
+              New-Item -ItemType Directory -Force -Path "build\engine\Release"
+              Copy-Item $vkDll.FullName "build\engine\Release\" -Force
+          } else {
+              Write-Host "Vulkan Runtime DLL not found in C:\VulkanSDK (relying on system / SDK Bin path)"
+          }
 
       - name: Run Tests
         run: |
