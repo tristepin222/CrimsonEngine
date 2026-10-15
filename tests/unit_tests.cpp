@@ -6,12 +6,61 @@
 #include <thread>
 #include <chrono>
 
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 #include "ecs/Registry.hpp"
 #include "ecs/Entity.hpp"
 #include "ecs/EntityManager.hpp"
 #include "ecs/ComponentStorage.hpp"
 #include "ecs/SystemManager.hpp"
 #include "core/JobSystem.hpp"
+
+// Subprocess test launcher with hard termination timeout to safely guard against deadlocks
+inline bool runSubprocessTest(const char* exePath, const char* testName, unsigned int timeoutMs) {
+#if defined(_WIN32)
+    std::string cmd = std::string("\"") + exePath + "\" --child-test " + testName;
+    STARTUPINFOA si;
+    PROCESS_INFORMATION pi;
+    ZeroMemory(&si, sizeof(si));
+    si.cb = sizeof(si);
+    ZeroMemory(&pi, sizeof(pi));
+
+    if (!CreateProcessA(nullptr, cmd.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi)) {
+        std::cerr << "Failed to spawn subprocess for " << testName << " (Error " << GetLastError() << ")" << std::endl;
+        return false;
+    }
+
+    DWORD waitResult = WaitForSingleObject(pi.hProcess, timeoutMs);
+    if (waitResult == WAIT_TIMEOUT) {
+        std::cerr << "[DEADLOCK DETECTED] Subprocess test '" << testName << "' timed out after "
+                  << timeoutMs << " ms! Terminating child process." << std::endl;
+        TerminateProcess(pi.hProcess, 1);
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+        return false;
+    }
+
+    DWORD exitCode = 1;
+    GetExitCodeProcess(pi.hProcess, &exitCode);
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+
+    return exitCode == 0;
+#else
+    (void)exePath;
+    (void)testName;
+    (void)timeoutMs;
+    return false;
+#endif
+}
 
 // Non-stripping test assertion macro that works reliably in Release (NDEBUG) builds
 #define TEST_ASSERT(cond, msg) \
@@ -424,17 +473,16 @@ void testEntityCommandBufferExceptionSafety() {
 }
 
 // --------------------------------------------------------------------------
-// 9. pushJobs() Batch Exceeding Queue Capacity (Deadlock-Proof with Timeout)
+// 9. pushJobs() Batch Exceeding Queue Capacity (Deadlock-Proof via Subprocess)
 // --------------------------------------------------------------------------
-void testPushJobsExceedingQueueCapacity() {
-    std::cout << "[Test 9] Running pushJobs() Batch Exceeding Queue Capacity Test..." << std::endl;
+int testPushJobsExceedingQueueCapacity_ChildProcess() {
     auto& js = Engine::JobSystem::getInstance();
     js.shutdown();
 
     // Configure small queue capacity (128 cells) and 2 worker threads
     constexpr size_t SMALL_CAPACITY = 128;
     js.initialize(2, SMALL_CAPACITY);
-    TEST_ASSERT(js.getQueueCapacity() == SMALL_CAPACITY, "Queue capacity must be exactly 128");
+    if (js.getQueueCapacity() != SMALL_CAPACITY) return 1;
 
     // Batch size of 1,024 jobs (8x the queue capacity)
     constexpr int BATCH_SIZE = 1024;
@@ -448,40 +496,26 @@ void testPushJobsExceedingQueueCapacity() {
         });
     }
 
-    std::atomic<bool> completed{false};
-    std::atomic<bool> timedOut{false};
+    auto handle = js.pushJobs(batch);
+    js.wait(handle);
 
-    // Run pushJobs + wait in a separate thread so a deadlock can be caught via timeout instead of hanging CI
-    std::thread testThread([&js, &batch, &completed]() {
-        auto handle = js.pushJobs(batch);
-        js.wait(handle);
-        completed.store(true, std::memory_order_release);
-    });
+    if (executedCount.load() != BATCH_SIZE) return 2;
 
-    auto start = std::chrono::steady_clock::now();
-    while (!completed.load(std::memory_order_acquire)) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - start).count();
-        if (elapsed >= 5) {
-            timedOut.store(true, std::memory_order_release);
-            break;
-        }
-    }
-
-    if (timedOut.load()) {
-        std::cerr << "[DEADLOCK DETECTED] pushJobs() deadlocked when batch size (1024) exceeded queue capacity (128)!" << std::endl;
-        testThread.detach();
-        TEST_ASSERT(false, "pushJobs() deadlocked on batch larger than queue capacity!");
-    } else {
-        testThread.join();
-    }
-
-    TEST_ASSERT(executedCount.load() == BATCH_SIZE, "All 1,024 batch jobs must have completed");
-    std::cout << "[Test 9] PASSED: pushJobs() successfully processed batch of 1,024 jobs through a 128-entry queue without deadlocking." << std::endl;
-
-    // Reset JobSystem to standard configuration
     js.shutdown();
-    js.initialize();
+    return 0; // Success
+}
+
+void testPushJobsExceedingQueueCapacity(const char* exePath) {
+    std::cout << "[Test 9] Running pushJobs() Batch Exceeding Queue Capacity Test (Subprocess Isolation)..." << std::endl;
+    if (exePath && exePath[0] != '\0') {
+        bool passed = runSubprocessTest(exePath, "pushJobsExceedingCapacity", 5000);
+        TEST_ASSERT(passed, "pushJobs() batch exceeding queue capacity failed or timed out in isolated subprocess!");
+        std::cout << "[Test 9] PASSED: pushJobs() processed 1,024 jobs through 128 queue in isolated child process without deadlock." << std::endl;
+    } else {
+        int res = testPushJobsExceedingQueueCapacity_ChildProcess();
+        TEST_ASSERT(res == 0, "pushJobs() in-process test failed!");
+        std::cout << "[Test 9] PASSED: pushJobs() processed 1,024 jobs in-process." << std::endl;
+    }
 }
 
 // --------------------------------------------------------------------------
@@ -531,13 +565,42 @@ void testSystemManagerFlushCommandBufferBothBuffers() {
     TEST_ASSERT(registry.has<TestComponent>(entityB), "entityB must have received component from Registry buffer");
     TEST_ASSERT(registry.get<TestComponent>(entityB)->value == 20, "entityB value must be 20");
 
-    std::cout << "[Test 10] PASSED: SystemManager::flushCommandBuffer() evaluated both command buffers without stopping on first error." << std::endl;
+    // Test that pre-existing exceptions in outErrors are NOT erroneously rethrown (Issue 4 fix):
+    std::vector<std::exception_ptr> preExistingErrors;
+    preExistingErrors.push_back(std::make_exception_ptr(std::logic_error("Pre-existing error")));
+
+    // Re-populate command buffer with an error on staleEntity
+    sm.getCommandBuffer().addComponent<TestComponent>(staleEntity, TestComponent{2, "StaleSM2"});
+    bool caughtCorrectNewError = false;
+    try {
+        sm.flushCommandBuffer(registry, true, &preExistingErrors);
+    } catch (const std::runtime_error&) {
+        // Must be the runtime_error from staleEntity emplace, NOT the pre-existing std::logic_error!
+        caughtCorrectNewError = true;
+    } catch (const std::logic_error&) {
+        caughtCorrectNewError = false;
+    }
+    TEST_ASSERT(caughtCorrectNewError, "flushCommandBuffer must rethrow the first error from THIS flush, not pre-existing errors in outErrors");
+    TEST_ASSERT(preExistingErrors.size() == 2, "outErrors should contain both the pre-existing error and the new flush error");
+
+    std::cout << "[Test 10] PASSED: SystemManager::flushCommandBuffer() evaluated both command buffers without stopping on first error and correctly reported new exceptions." << std::endl;
 }
 
 // --------------------------------------------------------------------------
 // Main Entry Point
 // --------------------------------------------------------------------------
-int main() {
+int main(int argc, char* argv[]) {
+    // Child process dispatch for subprocess-isolated tests
+    if (argc >= 3 && std::string(argv[1]) == "--child-test") {
+        std::string testName = argv[2];
+        if (testName == "pushJobsExceedingCapacity") {
+            return testPushJobsExceedingQueueCapacity_ChildProcess();
+        }
+        return 1;
+    }
+
+    const char* exePath = (argc > 0) ? argv[0] : "";
+
     std::cout << "======================================================" << std::endl;
     std::cout << "           RUNNING ENGINE TEST SUITE                  " << std::endl;
     std::cout << "======================================================" << std::endl;
@@ -551,7 +614,7 @@ int main() {
         testShutdownAndRestart();
         testEntityCommandBufferConcurrency();
         testEntityCommandBufferExceptionSafety();
-        testPushJobsExceedingQueueCapacity();
+        testPushJobsExceedingQueueCapacity(exePath);
         testSystemManagerFlushCommandBufferBothBuffers();
     } catch (const std::exception& e) {
         std::cerr << "[TEST SUITE FAILED] Unhandled exception: " << e.what() << std::endl;

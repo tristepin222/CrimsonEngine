@@ -143,6 +143,7 @@ public:
         size_t count = 0;
         std::vector<std::exception_ptr> localErrors;
         std::vector<std::exception_ptr>* targetErrors = outErrors ? outErrors : &localErrors;
+        const size_t initialErrorCount = targetErrors->size();
 
         // Flush SystemManager buffer first without throwing immediately so the second buffer is not skipped
         if (!commandBuffer.empty()) {
@@ -152,9 +153,9 @@ public:
         // Flush Registry buffer without throwing immediately
         count += registry.flushCommandBuffer(false, targetErrors);
 
-        // If requested to throw on error, rethrow the first captured error after BOTH buffers have flushed
-        if (throwOnError && !targetErrors->empty()) {
-            std::rethrow_exception((*targetErrors)[0]);
+        // If requested to throw on error, rethrow the first captured error added during THIS flush call
+        if (throwOnError && targetErrors->size() > initialErrorCount) {
+            std::rethrow_exception((*targetErrors)[initialErrorCount]);
         }
 
         return count;
