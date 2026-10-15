@@ -107,13 +107,18 @@ jobs:
       - name: Ensure Vulkan Runtime DLL
         shell: powershell
         run: |
+          Write-Host "Locating vulkan-1.dll on runner..."
           $vkDll = Get-ChildItem -Path "C:\VulkanSDK" -Filter "vulkan-1.dll" -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.FullName -match 'x64|runtime' } | Select-Object -First 1
+          if (-not $vkDll -and $env:VULKAN_SDK) {
+              $vkDll = Get-ChildItem -Path $env:VULKAN_SDK -Filter "vulkan-1.dll" -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.FullName -match 'x64|runtime' } | Select-Object -First 1
+          }
           if ($vkDll) {
-              Write-Host "Found Vulkan Runtime DLL: $($vkDll.FullName)"
+              Write-Host "Found Vulkan Runtime DLL at: $($vkDll.FullName)"
               New-Item -ItemType Directory -Force -Path "build\engine\Release"
-              Copy-Item $vkDll.FullName "build\engine\Release\" -Force
+              Copy-Item $vkDll.FullName "build\engine\Release\vulkan-1.dll" -Force -Verbose
+              Copy-Item $vkDll.FullName "C:\Windows\System32\vulkan-1.dll" -Force -ErrorAction SilentlyContinue
           } else {
-              Write-Host "Vulkan Runtime DLL not found in C:\VulkanSDK (relying on system / SDK Bin path)"
+              Write-Error "vulkan-1.dll could not be located under C:\VulkanSDK or VULKAN_SDK!"
           }
 
       - name: Run Tests

@@ -256,11 +256,6 @@ if(NOT CMAKE_GENERATOR_PLATFORM MATCHES "ARM" AND NOT CMAKE_CROSSCOMPILING)
     set_tests_properties(EngineUnitTests PROPERTIES
         WORKING_DIRECTORY "$<TARGET_FILE_DIR:engine_tests>"
     )
-    if(WIN32)
-        set_tests_properties(EngineUnitTests PROPERTIES
-            ENVIRONMENT "PATH=$<TARGET_FILE_DIR:engine_tests>;$ENV{VULKAN_SDK}/Bin;$ENV{VULKAN_SDK}/runtime/x64;$ENV{PATH}"
-        )
-    endif()
 endif()
 
 message(STATUS "Configured editor, game_runtime, reflection_generator, and engine_tests executables")
