@@ -190,6 +190,10 @@ jobs:
         run: |
           cmake --build build --config Release --parallel
 
+      - name: Run Tests
+        run: |
+          ctest --test-dir build -C Release --output-on-failure
+
       - name: Package Assets
         shell: powershell
         run: |

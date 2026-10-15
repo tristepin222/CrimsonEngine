@@ -63,7 +63,16 @@ inline bool runSubprocessTest(const char* exePath, const char* testName, unsigne
             // Wait for the process to exit before closing handles
             DWORD termWait = WaitForSingleObject(pi.hProcess, 5000);
             if (termWait == WAIT_TIMEOUT) {
-                std::cerr << "Warning: Terminated process did not exit within 5000 ms grace period!" << std::endl;
+                std::cerr << "Warning: Terminated process did not exit within 5000 ms grace period! Retrying termination..." << std::endl;
+                TerminateProcess(pi.hProcess, 1);
+                termWait = WaitForSingleObject(pi.hProcess, 5000);
+                if (termWait == WAIT_TIMEOUT) {
+                    DWORD exitCode = 0;
+                    GetExitCodeProcess(pi.hProcess, &exitCode);
+                    std::cerr << "CRITICAL ERROR: Child process PID " << pi.dwProcessId 
+                              << " could not be terminated by OS (ExitCode: " << exitCode 
+                              << "). Process remains alive in kernel!" << std::endl;
+                }
             } else if (termWait == WAIT_FAILED) {
                 std::cerr << "WaitForSingleObject failed while waiting for terminated process: " << GetLastError() << std::endl;
             }
@@ -111,6 +120,10 @@ inline bool runSubprocessTest(const char* exePath, const char* testName, unsigne
     }
 
     if (pid == 0) {
+        if (resolvedPath.empty()) {
+            std::cerr << "Child launch failed: executable path is empty!" << std::endl;
+            _exit(127);
+        }
         // Child process: execute the child test mode using execvp
         char* const args[] = {
             const_cast<char*>(resolvedPath.c_str()),
@@ -119,6 +132,8 @@ inline bool runSubprocessTest(const char* exePath, const char* testName, unsigne
             nullptr
         };
         execvp(resolvedPath.c_str(), args);
+        std::cerr << "Child process execvp failed for executable '" << resolvedPath 
+                  << "' (Error: " << std::strerror(errno) << ")" << std::endl;
         _exit(127);
     }
 
