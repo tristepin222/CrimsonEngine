@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(EngineWorkspace VERSION 1.4.3 LANGUAGES CXX)
+project(EngineWorkspace VERSION 2.0.0 LANGUAGES CXX)
 
 # Require C++20 standard globally
 set(CMAKE_CXX_STANDARD 20)
