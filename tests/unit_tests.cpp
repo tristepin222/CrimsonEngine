@@ -61,57 +61,67 @@ inline bool runSubprocessTest(const char* exePath, const char* testName, unsigne
                   << timeoutMs << " ms! Initiating process termination..." << std::endl;
 
         bool processConfirmedExited = false;
+        constexpr int MAX_TERMINATION_ATTEMPTS = 3;
+        constexpr DWORD WAIT_PER_ATTEMPT_MS = 2000;
 
-        if (!TerminateProcess(pi.hProcess, 1)) {
-            DWORD termErr = GetLastError();
-            std::cerr << "TerminateProcess failed on child process: " << termErr << std::endl;
-            // Check if process has already exited despite TerminateProcess failing
+        for (int attempt = 1; attempt <= MAX_TERMINATION_ATTEMPTS; ++attempt) {
+            // First check if the process already exited
             DWORD exitCode = 0;
-            if (GetExitCodeProcess(pi.hProcess, &exitCode)) {
-                if (exitCode != STILL_ACTIVE) {
-                    processConfirmedExited = true;
+            if (GetExitCodeProcess(pi.hProcess, &exitCode) && exitCode != STILL_ACTIVE) {
+                processConfirmedExited = true;
+                if (attempt > 1) {
+                    std::cerr << "Cleanup notice: Child process PID " << pi.dwProcessId
+                              << " exited with code " << exitCode << " during termination cleanup." << std::endl;
+                } else {
                     std::cerr << "Notice: Child process PID " << pi.dwProcessId 
                               << " was already terminated (ExitCode: " << exitCode << ")." << std::endl;
                 }
+                break;
             }
-        } else {
-            DWORD termWait = WaitForSingleObject(pi.hProcess, 5000);
+
+            // Attempt termination
+            if (!TerminateProcess(pi.hProcess, 1)) {
+                DWORD termErr = GetLastError();
+                std::cerr << "TerminateProcess failed on child process (attempt " << attempt << "/" 
+                          << MAX_TERMINATION_ATTEMPTS << "): " << termErr << std::endl;
+                
+                // Check if the process managed to exit anyway despite the error
+                if (GetExitCodeProcess(pi.hProcess, &exitCode) && exitCode != STILL_ACTIVE) {
+                    processConfirmedExited = true;
+                    std::cerr << "Notice: Child process PID " << pi.dwProcessId 
+                              << " exited despite TerminateProcess failure (ExitCode: " << exitCode << ")." << std::endl;
+                    break;
+                }
+            }
+
+            // Wait for the process to exit
+            DWORD termWait = WaitForSingleObject(pi.hProcess, WAIT_PER_ATTEMPT_MS);
             if (termWait == WAIT_OBJECT_0) {
                 processConfirmedExited = true;
+                break;
             } else if (termWait == WAIT_FAILED) {
-                std::cerr << "WaitForSingleObject failed while waiting for terminated process: " << GetLastError() << std::endl;
+                std::cerr << "WaitForSingleObject failed on child process PID " << pi.dwProcessId
+                          << ": " << GetLastError() << std::endl;
             } else if (termWait == WAIT_TIMEOUT) {
-                std::cerr << "Warning: Child process did not exit within 5000 ms grace period. Retrying TerminateProcess..." << std::endl;
-                if (!TerminateProcess(pi.hProcess, 1)) {
-                    std::cerr << "Retry TerminateProcess failed: " << GetLastError() << std::endl;
-                } else {
-                    termWait = WaitForSingleObject(pi.hProcess, 5000);
-                    if (termWait == WAIT_OBJECT_0) {
-                        processConfirmedExited = true;
-                    } else if (termWait == WAIT_FAILED) {
-                        std::cerr << "WaitForSingleObject failed on retry wait: " << GetLastError() << std::endl;
-                    } else if (termWait == WAIT_TIMEOUT) {
-                        DWORD exitCode = 0;
-                        if (!GetExitCodeProcess(pi.hProcess, &exitCode)) {
-                            std::cerr << "Cleanup warning: Child process PID " << pi.dwProcessId
-                                      << " timed out during termination wait, and GetExitCodeProcess failed: "
-                                      << GetLastError() << std::endl;
-                        } else if (exitCode == STILL_ACTIVE) {
-                            std::cerr << "Cleanup warning: Child process PID " << pi.dwProcessId
-                                      << " timed out during termination wait (process status: STILL_ACTIVE)." << std::endl;
-                        } else {
-                            processConfirmedExited = true;
-                            std::cerr << "Cleanup notice: Child process PID " << pi.dwProcessId
-                                      << " exited with code " << exitCode << " during termination cleanup." << std::endl;
-                        }
-                    }
+                // Check if it exited right at timeout
+                if (GetExitCodeProcess(pi.hProcess, &exitCode) && exitCode != STILL_ACTIVE) {
+                    processConfirmedExited = true;
+                    std::cerr << "Cleanup notice: Child process PID " << pi.dwProcessId
+                              << " exited with code " << exitCode << " after wait timeout." << std::endl;
+                    break;
+                }
+                if (attempt < MAX_TERMINATION_ATTEMPTS) {
+                    std::cerr << "Warning: Child process PID " << pi.dwProcessId 
+                              << " did not exit within " << WAIT_PER_ATTEMPT_MS 
+                              << " ms grace period. Retrying termination..." << std::endl;
                 }
             }
         }
 
         if (!processConfirmedExited) {
             std::cerr << "CRITICAL CLEANUP FAILURE: Process PID " << pi.dwProcessId 
-                      << " could not be confirmed as terminated. Cleanup unconfirmed!" << std::endl;
+                      << " could not be confirmed as terminated after " << MAX_TERMINATION_ATTEMPTS 
+                      << " attempts. Process may still be running!" << std::endl;
         }
 
         CloseHandle(pi.hProcess);
@@ -252,8 +262,14 @@ inline bool runSubprocessTest(const char* exePath, const char* testName, unsigne
                     break; // Complete error payload received
                 }
             } else if (n == 0) {
-                // EOF: write end closed on successful execvp
-                execSuccess = true;
+                if (totalRead == 0) {
+                    // EOF with 0 bytes read: write end closed on successful execvp (FD_CLOEXEC)
+                    execSuccess = true;
+                } else {
+                    // EOF after receiving partial payload: malformed handshake / abnormal termination
+                    std::cerr << "Malformed launch handshake from child process (read " 
+                              << totalRead << " of " << sizeof(childErr) << " bytes before EOF)." << std::endl;
+                }
                 break;
             } else {
                 if (errno == EINTR) continue;
@@ -268,9 +284,15 @@ inline bool runSubprocessTest(const char* exePath, const char* testName, unsigne
     }
     close(pipefd[0]);
 
-    if (!execSuccess && totalRead == sizeof(childErr)) {
-        std::cerr << "Child process execvp failed for executable '" << resolvedPath 
-                  << "' (Error: " << std::strerror(childErr) << ")" << std::endl;
+    if (!execSuccess) {
+        if (totalRead == sizeof(childErr)) {
+            std::cerr << "Child process execvp failed for executable '" << resolvedPath 
+                      << "' (Error: " << std::strerror(childErr) << ")" << std::endl;
+        } else {
+            std::cerr << "Child process failed during launch handshake (partial error payload: "
+                      << totalRead << " of " << sizeof(childErr) << " bytes received)." << std::endl;
+        }
+        kill(pid, SIGKILL);
         int status = 0;
         while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
         return false;
