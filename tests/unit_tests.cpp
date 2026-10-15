@@ -5,6 +5,7 @@
 #include <stdexcept>
 #include <thread>
 #include <chrono>
+#include <filesystem>
 
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
@@ -60,7 +61,12 @@ inline bool runSubprocessTest(const char* exePath, const char* testName, unsigne
             std::cerr << "TerminateProcess failed: " << GetLastError() << std::endl;
         } else {
             // Wait for the process to exit before closing handles
-            WaitForSingleObject(pi.hProcess, 5000);
+            DWORD termWait = WaitForSingleObject(pi.hProcess, 5000);
+            if (termWait == WAIT_TIMEOUT) {
+                std::cerr << "Warning: Terminated process did not exit within 5000 ms grace period!" << std::endl;
+            } else if (termWait == WAIT_FAILED) {
+                std::cerr << "WaitForSingleObject failed while waiting for terminated process: " << GetLastError() << std::endl;
+            }
         }
         CloseHandle(pi.hProcess);
         CloseHandle(pi.hThread);
@@ -87,6 +93,17 @@ inline bool runSubprocessTest(const char* exePath, const char* testName, unsigne
 
     return exitCode == 0;
 #else
+    // Resolve exePath to absolute path if possible for predictable behavior across runners
+    std::string resolvedPath = exePath ? exePath : "";
+    try {
+        if (!resolvedPath.empty()) {
+            std::filesystem::path p(resolvedPath);
+            if (std::filesystem::exists(p)) {
+                resolvedPath = std::filesystem::absolute(p).string();
+            }
+        }
+    } catch (...) {}
+
     pid_t pid = fork();
     if (pid < 0) {
         std::cerr << "fork() failed for " << testName << ": " << std::strerror(errno) << std::endl;
@@ -94,12 +111,18 @@ inline bool runSubprocessTest(const char* exePath, const char* testName, unsigne
     }
 
     if (pid == 0) {
-        // Child process: execute the child test mode
-        execl(exePath, exePath, "--child-test", testName, static_cast<char*>(nullptr));
+        // Child process: execute the child test mode using execvp
+        char* const args[] = {
+            const_cast<char*>(resolvedPath.c_str()),
+            const_cast<char*>("--child-test"),
+            const_cast<char*>(testName),
+            nullptr
+        };
+        execvp(resolvedPath.c_str(), args);
         _exit(127);
     }
 
-    // Parent process: poll waitpid with timeout
+    // Parent process: poll waitpid with timeout and handle EINTR
     auto startTime = std::chrono::steady_clock::now();
     int status = 0;
     while (true) {
@@ -108,7 +131,12 @@ inline bool runSubprocessTest(const char* exePath, const char* testName, unsigne
             // Child process exited normally or terminated
             return WIFEXITED(status) && (WEXITSTATUS(status) == 0);
         } else if (res < 0) {
+            if (errno == EINTR) {
+                continue; // Interrupted by signal, retry
+            }
             std::cerr << "waitpid failed on " << testName << ": " << std::strerror(errno) << std::endl;
+            kill(pid, SIGKILL);
+            while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {} // Reclaim child
             return false;
         }
 
@@ -117,7 +145,7 @@ inline bool runSubprocessTest(const char* exePath, const char* testName, unsigne
             std::cerr << "[DEADLOCK DETECTED] Subprocess test '" << testName << "' timed out after "
                       << timeoutMs << " ms! Sending SIGKILL to child process." << std::endl;
             kill(pid, SIGKILL);
-            waitpid(pid, &status, 0); // Reclaim zombie child process
+            while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {} // Reclaim zombie child process
             return false;
         }
 
