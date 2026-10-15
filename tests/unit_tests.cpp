@@ -20,6 +20,7 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <signal.h>
+#include <fcntl.h>
 #include <cstring>
 #include <cerrno>
 #endif
@@ -56,25 +57,38 @@ inline bool runSubprocessTest(const char* exePath, const char* testName, unsigne
 
     if (waitResult == WAIT_TIMEOUT) {
         std::cerr << "[DEADLOCK DETECTED] Subprocess test '" << testName << "' timed out after "
-                  << timeoutMs << " ms! Terminating child process." << std::endl;
+                  << timeoutMs << " ms! Initiating process termination..." << std::endl;
         if (!TerminateProcess(pi.hProcess, 1)) {
-            std::cerr << "TerminateProcess failed: " << GetLastError() << std::endl;
+            std::cerr << "TerminateProcess failed on child process: " << GetLastError() << std::endl;
         } else {
-            // Wait for the process to exit before closing handles
             DWORD termWait = WaitForSingleObject(pi.hProcess, 5000);
-            if (termWait == WAIT_TIMEOUT) {
-                std::cerr << "Warning: Terminated process did not exit within 5000 ms grace period! Retrying termination..." << std::endl;
-                TerminateProcess(pi.hProcess, 1);
-                termWait = WaitForSingleObject(pi.hProcess, 5000);
-                if (termWait == WAIT_TIMEOUT) {
-                    DWORD exitCode = 0;
-                    GetExitCodeProcess(pi.hProcess, &exitCode);
-                    std::cerr << "CRITICAL ERROR: Child process PID " << pi.dwProcessId 
-                              << " could not be terminated by OS (ExitCode: " << exitCode 
-                              << "). Process remains alive in kernel!" << std::endl;
-                }
+            if (termWait == WAIT_OBJECT_0) {
+                // Child terminated cleanly
             } else if (termWait == WAIT_FAILED) {
                 std::cerr << "WaitForSingleObject failed while waiting for terminated process: " << GetLastError() << std::endl;
+            } else if (termWait == WAIT_TIMEOUT) {
+                std::cerr << "Warning: Child process did not exit within 5000 ms grace period. Retrying TerminateProcess..." << std::endl;
+                if (!TerminateProcess(pi.hProcess, 1)) {
+                    std::cerr << "Retry TerminateProcess failed: " << GetLastError() << std::endl;
+                } else {
+                    termWait = WaitForSingleObject(pi.hProcess, 5000);
+                    if (termWait == WAIT_FAILED) {
+                        std::cerr << "WaitForSingleObject failed on retry wait: " << GetLastError() << std::endl;
+                    } else if (termWait == WAIT_TIMEOUT) {
+                        DWORD exitCode = 0;
+                        if (!GetExitCodeProcess(pi.hProcess, &exitCode)) {
+                            std::cerr << "Cleanup warning: Child process PID " << pi.dwProcessId
+                                      << " timed out during termination wait, and GetExitCodeProcess failed: "
+                                      << GetLastError() << std::endl;
+                        } else if (exitCode == STILL_ACTIVE) {
+                            std::cerr << "Cleanup warning: Child process PID " << pi.dwProcessId
+                                      << " timed out during termination wait (process status: STILL_ACTIVE)." << std::endl;
+                        } else {
+                            std::cerr << "Cleanup notice: Child process PID " << pi.dwProcessId
+                                      << " exited with code " << exitCode << " during termination cleanup." << std::endl;
+                        }
+                    }
+                }
             }
         }
         CloseHandle(pi.hProcess);
@@ -113,18 +127,35 @@ inline bool runSubprocessTest(const char* exePath, const char* testName, unsigne
         }
     } catch (...) {}
 
+    // Create a pipe to communicate execvp errors from child to parent safely.
+    // Child only calls async-signal-safe functions (close, write, _exit, execvp).
+    int pipefd[2];
+    if (pipe(pipefd) != 0) {
+        std::cerr << "pipe() failed for " << testName << ": " << std::strerror(errno) << std::endl;
+        return false;
+    }
+    (void)fcntl(pipefd[0], F_SETFD, FD_CLOEXEC);
+    (void)fcntl(pipefd[1], F_SETFD, FD_CLOEXEC);
+
     pid_t pid = fork();
     if (pid < 0) {
         std::cerr << "fork() failed for " << testName << ": " << std::strerror(errno) << std::endl;
+        close(pipefd[0]);
+        close(pipefd[1]);
         return false;
     }
 
     if (pid == 0) {
+        // Child process: strictly call only async-signal-safe functions
+        close(pipefd[0]); // Close read end
+
         if (resolvedPath.empty()) {
-            std::cerr << "Child launch failed: executable path is empty!" << std::endl;
+            int err = EINVAL;
+            [[maybe_unused]] auto w = write(pipefd[1], &err, sizeof(err));
+            close(pipefd[1]);
             _exit(127);
         }
-        // Child process: execute the child test mode using execvp
+
         char* const args[] = {
             const_cast<char*>(resolvedPath.c_str()),
             const_cast<char*>("--child-test"),
@@ -132,9 +163,28 @@ inline bool runSubprocessTest(const char* exePath, const char* testName, unsigne
             nullptr
         };
         execvp(resolvedPath.c_str(), args);
-        std::cerr << "Child process execvp failed for executable '" << resolvedPath 
-                  << "' (Error: " << std::strerror(errno) << ")" << std::endl;
+
+        // If execvp returns, it failed. Write errno through pipe to parent.
+        int err = errno;
+        [[maybe_unused]] auto w = write(pipefd[1], &err, sizeof(err));
+        close(pipefd[1]);
         _exit(127);
+    }
+
+    // Parent process: close write end
+    close(pipefd[1]);
+
+    // Check if child reported an execvp error through the pipe
+    int childErr = 0;
+    ssize_t bytesRead = read(pipefd[0], &childErr, sizeof(childErr));
+    close(pipefd[0]);
+
+    if (bytesRead == sizeof(childErr)) {
+        std::cerr << "Child process execvp failed for executable '" << resolvedPath 
+                  << "' (Error: " << std::strerror(childErr) << ")" << std::endl;
+        int status = 0;
+        while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
+        return false;
     }
 
     // Parent process: poll waitpid with timeout and handle EINTR
