@@ -13,16 +13,17 @@
     #define PLUGIN_API extern "C"
 #endif
 
-PLUGIN_API void registerEngineReflection() {
+PLUGIN_API void registerScriptReflection() {
     {
         Engine::ComponentReflection refl;
         refl.name = "CinemachineVirtualCamera";
-        refl.category = "General";
-        refl.displayName = "CinemachineVirtualCamera";
+        refl.category = "Camera";
+        refl.displayName = "Cinemachine Virtual Camera";
         refl.fields = {
             { "followTargetName", Engine::FieldType::String, offsetof(CinemachineVirtualCamera, followTargetName) },
             { "lookAtTargetName", Engine::FieldType::String, offsetof(CinemachineVirtualCamera, lookAtTargetName) },
             { "lockToBone", Engine::FieldType::String, offsetof(CinemachineVirtualCamera, lockToBone) },
+            { "mode", Engine::FieldType::Enum, offsetof(CinemachineVirtualCamera, mode), { "Third Person Follow", "First Person", "Fixed Look At", "2D Follow" } },
             { "mouseOrbit", Engine::FieldType::Bool, offsetof(CinemachineVirtualCamera, mouseOrbit) },
             { "mouseLook", Engine::FieldType::Bool, offsetof(CinemachineVirtualCamera, mouseLook) },
             { "orbitSensitivity", Engine::FieldType::Float, offsetof(CinemachineVirtualCamera, orbitSensitivity) },
@@ -41,21 +42,34 @@ PLUGIN_API void registerEngineReflection() {
         refl.has = [](Registry& reg, Entity e) { return reg.has<CinemachineVirtualCamera>(e); };
         refl.remove = [](Registry& reg, Entity e) { reg.remove<CinemachineVirtualCamera>(e); };
         refl.get = [](Registry& reg, Entity e) { return static_cast<void*>(reg.get<CinemachineVirtualCamera>(e)); };
+        refl.isEnabled = [](const Registry& reg, Entity e) { return reg.isComponentEnabled<CinemachineVirtualCamera>(e); };
+        refl.setEnabled = [](Registry& reg, Entity e, bool enabled) { reg.setComponentEnabled<CinemachineVirtualCamera>(e, enabled); };
         Engine::ComponentReflectionRegistry::getInstance().registerComponent(refl);
     }
 }
 
+static std::vector<std::shared_ptr<System>> s_pluginSystems;
+
 PLUGIN_API void initPlugin(PluginContext* context) {
     if (context && context->imguiContext) ImGui::SetCurrentContext(context->imguiContext);
-    registerEngineReflection();
+    registerScriptReflection();
+
+    s_pluginSystems.clear();
 
     // Register CinemachineSystem
     {
-        context->systemManager->addSystem(std::make_shared<CinemachineSystem>(*context->registry, *context->renderer, *context->editorMode));
+        auto sysPtr = std::make_shared<CinemachineSystem>(*context->registry, *context->renderer, *context->editorMode);
+        s_pluginSystems.push_back(sysPtr);
+        context->systemManager->addSystem(sysPtr);
     }
 
 }
 
 PLUGIN_API void shutdownPlugin(PluginContext* context) {
-    // Cleanup logic
+    if (context && context->systemManager) {
+        for (auto& sysPtr : s_pluginSystems) {
+            context->systemManager->removeSystem(sysPtr);
+        }
+    }
+    s_pluginSystems.clear();
 }

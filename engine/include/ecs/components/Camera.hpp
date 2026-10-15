@@ -10,7 +10,7 @@
  * @struct Camera
  * @brief Represents a camera component for rendering and viewing.
  */
-// [ReflectClass]
+// [ReflectClass("Rendering & Lights/Camera")]
 struct ENGINE_API Camera {
     /** @brief True if camera projection mode is Orthographic, false if Perspective. */
     // [ReflectField]
@@ -87,8 +87,6 @@ struct ENGINE_API Camera {
         return projection() * view(transform);
     }
 };
-
-REGISTER_COMPONENT(Camera, "Rendering & Lights/Camera");
 
 
 

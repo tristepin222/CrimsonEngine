@@ -23,37 +23,68 @@ std::unordered_map<std::string, TilesetAsset>& getTilesetCache() {
 }
 
 void invalidateTilesetCache(const std::string& path) {
+    (void)path;
     auto& cache = getTilesetCache();
-    if (path.empty()) {
-        cache.clear();
-    } else {
-        cache.erase(path);
-    }
+    cache.clear();
 }
 
-TilesetAsset* loadOrGetTileset(const std::string& path, VulkanRenderer& renderer) {
-    if (path.empty()) return nullptr;
+TilesetAsset* loadOrGetTileset(const std::string& rawPath, VulkanRenderer& renderer) {
+    if (rawPath.empty()) return nullptr;
+
+    std::string normPath = rawPath;
+    if (std::filesystem::exists(normPath)) {
+        try {
+            normPath = std::filesystem::absolute(normPath).generic_string();
+        } catch (...) {}
+    } else {
+        std::vector<std::string> candidates = {
+            "sandbox_game/" + rawPath,
+            "assets/tilesets/" + std::filesystem::path(rawPath).filename().string(),
+            "sandbox_game/assets/tilesets/" + std::filesystem::path(rawPath).filename().string()
+        };
+        for (const auto& cand : candidates) {
+            if (std::filesystem::exists(cand)) {
+                try {
+                    normPath = std::filesystem::absolute(cand).generic_string();
+                } catch (...) {
+                    normPath = cand;
+                }
+                break;
+            }
+        }
+    }
+
     auto& cache = getTilesetCache();
 
-    auto it = cache.find(path);
+    auto it = cache.find(normPath);
     if (it != cache.end()) {
-        // Rebuild atlas if it hasn't been built yet
         if (!it->second.atlas.valid) {
             it->second.buildAtlas(renderer);
         }
         return &it->second;
     }
 
-    // Load from disk
-    TilesetAsset ts = TilesetAsset::loadFromFile(path);
+    auto itRaw = cache.find(rawPath);
+    if (itRaw != cache.end()) {
+        if (!itRaw->second.atlas.valid) {
+            itRaw->second.buildAtlas(renderer);
+        }
+        return &itRaw->second;
+    }
+
+    TilesetAsset ts = TilesetAsset::loadFromFile(normPath);
     if (ts.filePath.empty()) {
-        std::cerr << "[TilesetAsset] Failed to load tileset from: " << path << std::endl;
+        ts = TilesetAsset::loadFromFile(rawPath);
+    }
+    if (ts.filePath.empty()) {
+        std::cerr << "[TilesetAsset] Failed to load tileset from: " << rawPath << std::endl;
         return nullptr;
     }
 
     ts.buildAtlas(renderer);
-    cache[path] = std::move(ts);
-    return &cache[path];
+    cache[normPath] = ts;
+    cache[rawPath]  = std::move(ts);
+    return &cache[normPath];
 }
 
 // ---------------------------------------------------------------------------
@@ -76,6 +107,9 @@ TileAsset TilesetAsset::loadTileFile(const std::string& path) {
     tile.id          = static_cast<int>(idVal);
     tile.name        = JSONUtils::extractStringValue(json, "name");
     tile.texturePath = JSONUtils::extractStringValue(json, "texturePath");
+    if (!tile.texturePath.empty()) {
+        tile.texturePath = resolveTileTexturePath(tile.texturePath, path);
+    }
 
     float solidVal = 0.f;
     JSONUtils::extractFloatValue(json, "isSolid", solidVal);
@@ -86,6 +120,13 @@ TileAsset TilesetAsset::loadTileFile(const std::string& path) {
     JSONUtils::extractFloatValue(json, "gridY", gy);
     tile.gridX = static_cast<int>(gx);
     tile.gridY = static_cast<int>(gy);
+
+    float tr = 1.f, tg = 1.f, tb = 1.f, ta = 1.f;
+    JSONUtils::extractFloatValue(json, "colorTintR", tr);
+    JSONUtils::extractFloatValue(json, "colorTintG", tg);
+    JSONUtils::extractFloatValue(json, "colorTintB", tb);
+    JSONUtils::extractFloatValue(json, "colorTintA", ta);
+    tile.colorTint = glm::vec4(tr, tg, tb, ta);
 
     return tile;
 }
@@ -103,7 +144,11 @@ void TilesetAsset::saveTileFile(const TileAsset& tile, const std::string& path) 
     f << "  \"texturePath\": \"" << tile.texturePath << "\",\n";
     f << "  \"isSolid\": " << (tile.isSolid ? 1 : 0) << ",\n";
     f << "  \"gridX\": " << tile.gridX << ",\n";
-    f << "  \"gridY\": " << tile.gridY << "\n";
+    f << "  \"gridY\": " << tile.gridY << ",\n";
+    f << "  \"colorTintR\": " << tile.colorTint.r << ",\n";
+    f << "  \"colorTintG\": " << tile.colorTint.g << ",\n";
+    f << "  \"colorTintB\": " << tile.colorTint.b << ",\n";
+    f << "  \"colorTintA\": " << tile.colorTint.a << "\n";
     f << "}\n";
 }
 
@@ -111,8 +156,22 @@ void TilesetAsset::saveTileFile(const TileAsset& tile, const std::string& path) 
 // Disk I/O — .tileset files
 // ---------------------------------------------------------------------------
 
-TilesetAsset TilesetAsset::loadFromFile(const std::string& path) {
+TilesetAsset TilesetAsset::loadFromFile(const std::string& rawPath) {
     TilesetAsset ts;
+    std::string path = rawPath;
+    if (!std::filesystem::exists(path)) {
+        std::vector<std::string> candidates = {
+            "sandbox_game/" + rawPath,
+            "assets/tilesets/" + std::filesystem::path(rawPath).filename().string(),
+            "sandbox_game/assets/tilesets/" + std::filesystem::path(rawPath).filename().string()
+        };
+        for (const auto& cand : candidates) {
+            if (std::filesystem::exists(cand)) {
+                path = cand;
+                break;
+            }
+        }
+    }
     if (!std::filesystem::exists(path)) return ts;
 
     std::ifstream f(path);
@@ -202,32 +261,133 @@ void TilesetAsset::saveToFile(const TilesetAsset& ts) {
 // Atlas building
 // ---------------------------------------------------------------------------
 
+std::string resolveTileTexturePath(const std::string& rawPath, const std::string& tilesetPath) {
+    if (rawPath.empty()) return "";
+    if (std::filesystem::exists(rawPath)) return rawPath;
+
+    static std::unordered_map<std::string, std::string> s_pathCache;
+    auto it = s_pathCache.find(rawPath);
+    if (it != s_pathCache.end() && std::filesystem::exists(it->second)) {
+        return it->second;
+    }
+
+    std::vector<std::string> searchPaths;
+    if (!tilesetPath.empty()) {
+        std::filesystem::path tsDir = std::filesystem::path(tilesetPath).parent_path();
+        searchPaths.push_back((tsDir / rawPath).generic_string());
+        searchPaths.push_back((tsDir / "GroundTextures" / rawPath).generic_string());
+        searchPaths.push_back((tsDir / std::filesystem::path(rawPath).filename()).generic_string());
+    }
+    searchPaths.push_back("assets/" + rawPath);
+    searchPaths.push_back("assets/textures/" + rawPath);
+    searchPaths.push_back("assets/textures/GroundTextures/" + rawPath);
+    searchPaths.push_back("sandbox_game/assets/" + rawPath);
+    searchPaths.push_back("sandbox_game/assets/textures/" + rawPath);
+    searchPaths.push_back("sandbox_game/assets/textures/GroundTextures/" + rawPath);
+
+    for (const auto& p : searchPaths) {
+        if (std::filesystem::exists(p)) {
+            s_pathCache[rawPath] = p;
+            return p;
+        }
+    }
+
+    s_pathCache[rawPath] = rawPath;
+    return rawPath;
+}
+
 void TilesetAsset::buildAtlas(VulkanRenderer& renderer) {
     atlas = AtlasCache{};
 
     if (tiles.empty()) {
-        atlas.valid = true; // empty but valid
+        atlas.valid = true;
+        atlas.atlasBuilt = true;
         return;
     }
 
-    const int cellW = (tileWidth  > 0) ? tileWidth  : 16;
-    const int cellH = (tileHeight > 0) ? tileHeight : 16;
+    int numTiles = static_cast<int>(tiles.size());
 
-    // Compute atlas grid dimensions (square-ish layout)
-    int numTiles   = static_cast<int>(tiles.size());
-    int gridCols   = static_cast<int>(std::ceil(std::sqrt(static_cast<double>(numTiles))));
-    int gridRows   = (numTiles + gridCols - 1) / gridCols;
+    struct LoadedImage {
+        stbi_uc* pixels = nullptr;
+        int width = 0;
+        int height = 0;
+    };
+    std::vector<LoadedImage> loadedImages(numTiles);
+
+    int targetTileW = (tileWidth  > 0) ? tileWidth  : 16;
+    int targetTileH = (tileHeight > 0) ? tileHeight : 16;
+    int rawMaxW = targetTileW;
+    int rawMaxH = targetTileH;
+
+    stbi_set_flip_vertically_on_load(false);
+    for (int i = 0; i < numTiles; ++i) {
+        const auto& tile = tiles[i];
+        std::string resolvedPath = resolveTileTexturePath(tile.texturePath, filePath);
+        if (!resolvedPath.empty() && std::filesystem::exists(resolvedPath)) {
+            int tw = 0, th = 0, tc = 0;
+            stbi_uc* srcPx = stbi_load(resolvedPath.c_str(), &tw, &th, &tc, STBI_rgb_alpha);
+            if (srcPx) {
+                loadedImages[i] = LoadedImage{ srcPx, tw, th };
+                if (tw <= targetTileW * 2 && tw > rawMaxW) rawMaxW = tw;
+                if (th <= targetTileH * 2 && th > rawMaxH) rawMaxH = th;
+            }
+        }
+    }
+
+    int gridCols = static_cast<int>(std::ceil(std::sqrt(static_cast<double>(numTiles))));
+    int gridRows = (numTiles + gridCols - 1) / gridCols;
+
+    // Hardware limit protection: cap total atlas dimensions to 4096 (or physical GPU limit)
+    uint32_t maxGpuDim = 4096;
+    if (renderer.device.getPhysicalDevice() != VK_NULL_HANDLE) {
+        VkPhysicalDeviceProperties props{};
+        vkGetPhysicalDeviceProperties(renderer.device.getPhysicalDevice(), &props);
+        if (props.limits.maxImageDimension2D > 0) {
+            maxGpuDim = props.limits.maxImageDimension2D;
+        }
+    }
+
+    int maxAllowedAtlasDim = static_cast<int>(std::min(maxGpuDim, 4096u));
+
+    int maxAllowedCellW = maxAllowedAtlasDim / std::max(gridCols, 1);
+    int maxAllowedCellH = maxAllowedAtlasDim / std::max(gridRows, 1);
+    if (maxAllowedCellW < 8) maxAllowedCellW = 8;
+    if (maxAllowedCellH < 8) maxAllowedCellH = 8;
+
+    int cellW = std::min(rawMaxW, maxAllowedCellW);
+    int cellH = std::min(rawMaxH, maxAllowedCellH);
+    if (cellW < 1) cellW = 1;
+    if (cellH < 1) cellH = 1;
 
     int atlasW = gridCols * cellW;
     int atlasH = gridRows * cellH;
 
-    std::vector<uint8_t> atlasPx(atlasW * atlasH * 4, 0); // RGBA, default transparent black
+    std::vector<uint8_t> atlasPx;
+    try {
+        atlasPx.resize(static_cast<size_t>(atlasW) * static_cast<size_t>(atlasH) * 4, 0);
+    } catch (const std::exception& e) {
+        std::cerr << "[TilesetAsset] Failed to allocate atlas memory: " << e.what() << std::endl;
+        atlas.atlasBuilt = true;
+        for (auto& img : loadedImages) {
+            if (img.pixels) stbi_image_free(img.pixels);
+        }
+        return;
+    }
 
-    // Solid magenta placeholder for missing textures (4 bytes: R G B A)
     constexpr uint8_t MAGENTA[4] = { 255, 0, 255, 255 };
+
+    std::unordered_map<std::string, int> pathCounts;
+    for (const auto& t : tiles) {
+        if (!t.texturePath.empty()) {
+            pathCounts[t.texturePath]++;
+        }
+    }
 
     for (int ti = 0; ti < numTiles; ++ti) {
         TileAsset& tile = tiles[ti];
+        stbi_uc* srcPx = loadedImages[ti].pixels;
+        int tw = loadedImages[ti].width;
+        int th = loadedImages[ti].height;
 
         int col = ti % gridCols;
         int row = ti / gridCols;
@@ -239,42 +399,89 @@ void TilesetAsset::buildAtlas(VulkanRenderer& renderer) {
         float v1 = static_cast<float>((row + 1) * cellH) / static_cast<float>(atlasH);
         tile.atlasUV = glm::vec4(u0, v0, u1, v1);
 
-        // Load tile texture pixels
-        int tw = 0, th = 0, tc = 0;
-        stbi_uc* srcPx = nullptr;
-        if (!tile.texturePath.empty() && std::filesystem::exists(tile.texturePath)) {
-            stbi_set_flip_vertically_on_load(false);
-            srcPx = stbi_load(tile.texturePath.c_str(), &tw, &th, &tc, STBI_rgb_alpha);
-        }
-
-        // Blit tile pixels into the atlas (with scaling if needed)
+        // Fast row-by-row blitting with sub-rect cropping for shared sheet textures
         int dstX = col * cellW;
         int dstY = row * cellH;
 
-        for (int py = 0; py < cellH; ++py) {
-            for (int px = 0; px < cellW; ++px) {
-                int dstIdx = ((dstY + py) * atlasW + (dstX + px)) * 4;
+        bool isDefaultTint = (tile.colorTint == glm::vec4(1.f, 1.f, 1.f, 1.f));
 
-                if (srcPx && tw > 0 && th > 0) {
-                    // Nearest-neighbour scale from source → cellW x cellH
-                    int srcPxX = (px * tw) / cellW;
-                    int srcPxY = (py * th) / cellH;
-                    int srcIdx = (srcPxY * tw + srcPxX) * 4;
-                    atlasPx[dstIdx + 0] = srcPx[srcIdx + 0];
-                    atlasPx[dstIdx + 1] = srcPx[srcIdx + 1];
-                    atlasPx[dstIdx + 2] = srcPx[srcIdx + 2];
-                    atlasPx[dstIdx + 3] = srcPx[srcIdx + 3];
-                } else {
-                    // Magenta placeholder
-                    atlasPx[dstIdx + 0] = MAGENTA[0];
-                    atlasPx[dstIdx + 1] = MAGENTA[1];
-                    atlasPx[dstIdx + 2] = MAGENTA[2];
-                    atlasPx[dstIdx + 3] = MAGENTA[3];
+        if (srcPx && tw > 0 && th > 0) {
+            int cropX = 0;
+            int cropY = 0;
+            int cropW = tw;
+            int cropH = th;
+
+            // Only sub-crop if multiple tiles share the exact same texture atlas sheet
+            if (pathCounts[tile.texturePath] > 1 && (tw > targetTileW || th > targetTileH)) {
+                int colsInSrc = tw / targetTileW;
+                int rowsInSrc = th / targetTileH;
+
+                if (colsInSrc > 0 && rowsInSrc > 0) {
+                    cropX = (tile.gridX % colsInSrc) * targetTileW;
+                    cropY = (tile.gridY % rowsInSrc) * targetTileH;
+                    cropW = std::min(targetTileW, tw - cropX);
+                    cropH = std::min(targetTileH, th - cropY);
+                }
+            }
+
+            if (cellW == cropW && cellH == cropH && isDefaultTint && cropX + cropW <= tw && cropY + cropH <= th) {
+                // Direct fast memcpy for unscaled, untinted sub-rect tiles
+                for (int py = 0; py < cellH; ++py) {
+                    int dstIdx = ((dstY + py) * atlasW + dstX) * 4;
+                    int srcIdx = ((cropY + py) * tw + cropX) * 4;
+                    std::memcpy(&atlasPx[dstIdx], &srcPx[srcIdx], static_cast<size_t>(cellW) * 4);
+                }
+            } else {
+                // Fast row-strided sampling from crop region
+                for (int py = 0; py < cellH; ++py) {
+                    int srcPy = cropY + (py * cropH) / cellH;
+                    if (srcPy >= th) srcPy = th - 1;
+
+                    int dstRowIdx = ((dstY + py) * atlasW + dstX) * 4;
+                    int srcRowIdx = (srcPy * tw) * 4;
+
+                    for (int px = 0; px < cellW; ++px) {
+                        int srcPxX = cropX + (px * cropW) / cellW;
+                        if (srcPxX >= tw) srcPxX = tw - 1;
+
+                        int dstIdx = dstRowIdx + px * 4;
+                        int srcIdx = srcRowIdx + srcPxX * 4;
+
+                        if (isDefaultTint) {
+                            atlasPx[dstIdx + 0] = srcPx[srcIdx + 0];
+                            atlasPx[dstIdx + 1] = srcPx[srcIdx + 1];
+                            atlasPx[dstIdx + 2] = srcPx[srcIdx + 2];
+                            atlasPx[dstIdx + 3] = srcPx[srcIdx + 3];
+                        } else {
+                            atlasPx[dstIdx + 0] = static_cast<uint8_t>(std::clamp(srcPx[srcIdx + 0] * tile.colorTint.r, 0.f, 255.f));
+                            atlasPx[dstIdx + 1] = static_cast<uint8_t>(std::clamp(srcPx[srcIdx + 1] * tile.colorTint.g, 0.f, 255.f));
+                            atlasPx[dstIdx + 2] = static_cast<uint8_t>(std::clamp(srcPx[srcIdx + 2] * tile.colorTint.b, 0.f, 255.f));
+                            atlasPx[dstIdx + 3] = static_cast<uint8_t>(std::clamp(srcPx[srcIdx + 3] * tile.colorTint.a, 0.f, 255.f));
+                        }
+                    }
+                }
+            }
+            stbi_image_free(srcPx);
+        } else {
+            // Fill placeholder cell
+            for (int py = 0; py < cellH; ++py) {
+                int dstRowIdx = ((dstY + py) * atlasW + dstX) * 4;
+                for (int px = 0; px < cellW; ++px) {
+                    int dstIdx = dstRowIdx + px * 4;
+                    if (isDefaultTint) {
+                        atlasPx[dstIdx + 0] = MAGENTA[0];
+                        atlasPx[dstIdx + 1] = MAGENTA[1];
+                        atlasPx[dstIdx + 2] = MAGENTA[2];
+                        atlasPx[dstIdx + 3] = MAGENTA[3];
+                    } else {
+                        atlasPx[dstIdx + 0] = static_cast<uint8_t>(std::clamp(MAGENTA[0] * tile.colorTint.r, 0.f, 255.f));
+                        atlasPx[dstIdx + 1] = static_cast<uint8_t>(std::clamp(MAGENTA[1] * tile.colorTint.g, 0.f, 255.f));
+                        atlasPx[dstIdx + 2] = static_cast<uint8_t>(std::clamp(MAGENTA[2] * tile.colorTint.b, 0.f, 255.f));
+                        atlasPx[dstIdx + 3] = static_cast<uint8_t>(std::clamp(MAGENTA[3] * tile.colorTint.a, 0.f, 255.f));
+                    }
                 }
             }
         }
-
-        if (srcPx) stbi_image_free(srcPx);
     }
 
     // Upload atlas to GPU via ResourceManager
@@ -290,8 +497,10 @@ void TilesetAsset::buildAtlas(VulkanRenderer& renderer) {
         atlas.descriptorSet = tex->descriptorSet;
         atlas.singleDescriptorSet = tex->singleDescriptorSet;
         atlas.valid       = true;
+        atlas.atlasBuilt  = true;
     } else {
         std::cerr << "[TilesetAsset] Atlas GPU upload failed for: " << filePath << std::endl;
+        atlas.atlasBuilt  = true; // marked built to prevent per-frame retry loops
     }
 }
 

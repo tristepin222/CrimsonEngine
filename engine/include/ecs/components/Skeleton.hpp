@@ -33,7 +33,7 @@ struct Joint {
  * @struct SkeletonComponent
  * @brief Component managing the list of joints and generating the offset matrices palette.
  */
-// [ReflectClass]
+// [ReflectClass("Animation/Skeleton")]
 struct SkeletonComponent {
 
     /** @brief List of joints forming the skeleton hierarchy. */
@@ -44,8 +44,5 @@ struct SkeletonComponent {
     std::shared_ptr<VulkanBuffer> gpuBuffer;
     VkDescriptorSet descriptorSet = VK_NULL_HANDLE;
 };
-
-#include "meta/ComponentReflection.hpp"
-REGISTER_COMPONENT(SkeletonComponent, "Animation/Skeleton");
 
 

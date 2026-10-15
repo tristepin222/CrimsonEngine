@@ -41,21 +41,55 @@ namespace Engine {
         ImGui::Begin("##GameUI_CanvasWindow", nullptr, flags);
         ImDrawList* drawList = ImGui::GetWindowDrawList();
 
-        // 1. Gather all Canvas root elements
-        for (auto [canvasEnt, canvas] : registry.view<CanvasComponent>()) {
-            // Find child elements under this Canvas hierarchy
-            for (auto [ent, rect] : registry.view<RectTransform>()) {
-                bool isRoot = true;
-                if (auto* hierarchy = registry.get<HierarchyComponent>(ent)) {
-                    if (hierarchy->parent.getId() != Entity::INVALID_ENTITY && registry.isValid(hierarchy->parent)) {
-                        // If parent has a RectTransform component, then it's a child widget, not a root widget
-                        if (registry.has<RectTransform>(hierarchy->parent)) {
-                            isRoot = false;
-                        }
+        // Auto-heal: Ensure any UI component entity has a RectTransform component
+        for (auto [ent, panel] : registry.view<UIPanelComponent>()) {
+            if (!registry.has<RectTransform>(ent)) {
+                registry.emplace<RectTransform>(ent, RectTransform{ {0.5f, 0.5f}, {0.5f, 0.5f}, {0.0f, 0.0f}, {160.0f, 36.0f}, {0.5f, 0.5f} });
+            }
+        }
+        for (auto [ent, txt] : registry.view<UITextComponent>()) {
+            if (!registry.has<RectTransform>(ent)) {
+                registry.emplace<RectTransform>(ent, RectTransform{ {0.5f, 0.5f}, {0.5f, 0.5f}, {0.0f, 0.0f}, {150.0f, 30.0f}, {0.5f, 0.5f} });
+            }
+        }
+        for (auto [ent, img] : registry.view<UIImageComponent>()) {
+            if (!registry.has<RectTransform>(ent)) {
+                registry.emplace<RectTransform>(ent, RectTransform{ {0.5f, 0.5f}, {0.5f, 0.5f}, {0.0f, 0.0f}, {100.0f, 100.0f}, {0.5f, 0.5f} });
+            }
+        }
+        for (auto [ent, btn] : registry.view<UIButtonComponent>()) {
+            if (!registry.has<RectTransform>(ent)) {
+                registry.emplace<RectTransform>(ent, RectTransform{ {0.5f, 0.5f}, {0.5f, 0.5f}, {0.0f, 0.0f}, {140.0f, 40.0f}, {0.5f, 0.5f} });
+            }
+        }
+
+        // Helper lambda: check if an entity has a CanvasComponent ancestor that is hidden
+        auto isCanvasHidden = [&](Entity e) -> bool {
+            Entity curr = e;
+            while (registry.isValid(curr)) {
+                if (auto* canvas = registry.get<CanvasComponent>(curr)) {
+                    if (!canvas->isVisible) return true;
+                }
+                auto* h = registry.get<HierarchyComponent>(curr);
+                if (!h || h->parent.getId() == Entity::INVALID_ENTITY || !registry.isValid(h->parent) || h->parent == curr) break;
+                curr = h->parent;
+            }
+            return false;
+        };
+
+        // Render root UI widgets
+        for (auto [ent, rect] : registry.view<RectTransform>()) {
+            bool isRootWidget = true;
+            if (auto* hierarchy = registry.get<HierarchyComponent>(ent)) {
+                if (hierarchy->parent.getId() != Entity::INVALID_ENTITY && registry.isValid(hierarchy->parent)) {
+                    if (registry.has<RectTransform>(hierarchy->parent)) {
+                        isRootWidget = false;
                     }
                 }
+            }
 
-                if (isRoot) {
+            if (isRootWidget) {
+                if (!isCanvasHidden(ent)) {
                     drawWidget(ent, viewportPos, viewportSize, drawList);
                 }
             }
@@ -118,9 +152,13 @@ namespace Engine {
 
         // Text Component
         if (auto* txt = registry.get<UITextComponent>(entity)) {
-            if (!txt->text.empty()) {
-                float fontScale = txt->fontSize / 14.0f;
-                ImGui::SetWindowFontScale(fontScale);
+            if (!txt->text.empty() && txt->color.a > 0.001f) {
+                ImFont* font = ImGui::GetFont();
+                if (!font && !ImGui::GetIO().Fonts->Fonts.empty()) {
+                    font = ImGui::GetIO().Fonts->Fonts[0];
+                }
+                float fontSize = (txt->fontSize > 0.0f) ? txt->fontSize : ImGui::GetFontSize();
+                if (fontSize <= 0.0f) fontSize = 14.0f;
 
                 ImVec2 textSize = ImGui::CalcTextSize(txt->text.c_str());
                 float textX = absX;
@@ -131,12 +169,21 @@ namespace Engine {
                     textY = absY + (h - textSize.y) * 0.5f;
                 }
 
-                ImGui::SetCursorScreenPos(ImVec2(textX, textY));
-                ImGui::TextColored(
-                    ImVec4(txt->color.r, txt->color.g, txt->color.b, txt->color.a),
-                    "%s", txt->text.c_str()
-                );
-                ImGui::SetWindowFontScale(1.0f);
+                if (font) {
+                    drawList->AddText(
+                        font,
+                        fontSize,
+                        ImVec2(textX, textY),
+                        ImColor(txt->color.r, txt->color.g, txt->color.b, txt->color.a),
+                        txt->text.c_str()
+                    );
+                } else {
+                    drawList->AddText(
+                        ImVec2(textX, textY),
+                        ImColor(txt->color.r, txt->color.g, txt->color.b, txt->color.a),
+                        txt->text.c_str()
+                    );
+                }
             }
         }
 

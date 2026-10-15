@@ -12,37 +12,53 @@
     #define PLUGIN_API extern "C"
 #endif
 
-PLUGIN_API void registerEngineReflection() {
+PLUGIN_API void registerScriptReflection() {
     {
         Engine::ComponentReflection refl;
         refl.name = "AStarAgent";
         refl.category = "General";
-        refl.displayName = "AStarAgent";
+        refl.displayName = "AStar Agent";
         refl.fields = {
+            { "navMode", Engine::FieldType::Enum, offsetof(AStarAgent, navMode), { "Auto", "Tilemap2D", "GridWorld3D" } },
             { "targetTransform", Engine::FieldType::Entity, offsetof(AStarAgent, targetTransform) },
             { "speed", Engine::FieldType::Float, offsetof(AStarAgent, speed) },
             { "allowDiagonal", Engine::FieldType::Bool, offsetof(AStarAgent, allowDiagonal) },
+            { "maxElevationStep", Engine::FieldType::Int, offsetof(AStarAgent, maxElevationStep) },
+            { "turnSpeed", Engine::FieldType::Float, offsetof(AStarAgent, turnSpeed) },
             { "showDebugPath", Engine::FieldType::Bool, offsetof(AStarAgent, showDebugPath) }
         };
         refl.add = [](Registry& reg, Entity e) { reg.emplace<AStarAgent>(e, AStarAgent{}); };
         refl.has = [](Registry& reg, Entity e) { return reg.has<AStarAgent>(e); };
         refl.remove = [](Registry& reg, Entity e) { reg.remove<AStarAgent>(e); };
         refl.get = [](Registry& reg, Entity e) { return static_cast<void*>(reg.get<AStarAgent>(e)); };
+        refl.isEnabled = [](const Registry& reg, Entity e) { return reg.isComponentEnabled<AStarAgent>(e); };
+        refl.setEnabled = [](Registry& reg, Entity e, bool enabled) { reg.setComponentEnabled<AStarAgent>(e, enabled); };
         Engine::ComponentReflectionRegistry::getInstance().registerComponent(refl);
     }
 }
 
+static std::vector<std::shared_ptr<System>> s_pluginSystems;
+
 PLUGIN_API void initPlugin(PluginContext* context) {
     if (context && context->imguiContext) ImGui::SetCurrentContext(context->imguiContext);
-    registerEngineReflection();
+    registerScriptReflection();
+
+    s_pluginSystems.clear();
 
     // Register AStarSystem
     {
-        context->systemManager->addSystem(std::make_shared<AStarSystem>(*context->registry, *context->renderer, *context->editorMode));
+        auto sysPtr = std::make_shared<AStarSystem>(*context->registry, *context->renderer, *context->editorMode);
+        s_pluginSystems.push_back(sysPtr);
+        context->systemManager->addSystem(sysPtr);
     }
 
 }
 
 PLUGIN_API void shutdownPlugin(PluginContext* context) {
-    // Cleanup logic
+    if (context && context->systemManager) {
+        for (auto& sysPtr : s_pluginSystems) {
+            context->systemManager->removeSystem(sysPtr);
+        }
+    }
+    s_pluginSystems.clear();
 }

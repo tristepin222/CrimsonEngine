@@ -15,8 +15,12 @@ namespace Engine {
         reg.registerArchetype({ "3D Objects/Cube",     "Cube",     true,  false });
         reg.registerArchetype({ "3D Objects/Triangle", "Triangle", true,  false });
         reg.registerArchetype({ "3D Objects/Quad",     "Quad",     true,  false });
+        reg.registerArchetype({ "3D Objects/Terrain",  "Terrain",  false, false });
+        reg.registerArchetype({ "3D Objects/Grid World", "Grid World", false, false });
 
         // ---- Rendering & Lights ----
+        reg.registerArchetype({ "Rendering & Lights/Directional Light", "Directional Light", false, false });
+        reg.registerArchetype({ "Rendering & Lights/Point Light",       "Point Light",       false, false });
         reg.registerArchetype({ "Rendering & Lights/Camera",          "Camera",          false, false });
         reg.registerArchetype({ "Rendering & Lights/Grid",            "Grid",            false, false });
         reg.registerArchetype({ "Rendering & Lights/Sprite Renderer", "Sprite Renderer", false, false });

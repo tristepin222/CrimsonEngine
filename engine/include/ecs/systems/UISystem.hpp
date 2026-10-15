@@ -9,8 +9,12 @@ namespace Engine {
 
     class UISystem : public System {
     public:
+        const char* getName() const override { return "UISystem"; }
+        SystemStage getStage() const override { return SystemStage::PostUpdate; }
+
         UISystem(Registry& reg, VulkanRenderer& rend) 
             : registry(reg), renderer(rend) {}
+
 
         void setEditorActive(bool active) { editorActive = active; }
         void setPlaying(bool playing) { isPlaying = playing; }

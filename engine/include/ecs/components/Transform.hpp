@@ -123,7 +123,7 @@ public:
  * @struct Transform
  * @brief Represents the position, rotation, and scale of an entity in 3D space.
  */
-// [ReflectClass]
+// [ReflectClass("General/Transform")]
 struct ENGINE_API Transform {
 
     // [ReflectField]
@@ -195,8 +195,6 @@ struct ENGINE_API Transform {
         : position(pos), rotation(rot), scale(s) {
     }
 };
-
-REGISTER_COMPONENT(Transform, "General");
 
 
 

@@ -47,16 +47,16 @@ public:
      * @return Vector of framebuffer handles.
      */
     const std::vector<VkFramebuffer>& getFramebuffers() const { return framebuffers; }
-    /**
-     * @brief Gets default render pass for swapchain buffers.
-     * @return VkRenderPass.
-     */
+    /** @brief Gets default render pass for swapchain buffers. */
     VkRenderPass getRenderPass() const { return renderPass; }
-    /**
-     * @brief Gets raw KHR swapchain.
-     * @return VkSwapchainKHR.
-     */
+    /** @brief Gets raw KHR swapchain. */
     VkSwapchainKHR getSwapchain() const { return swapchain; }
+    /** @brief Gets depth image view. */
+    VkImageView getDepthImageView() const { return depthImageView; }
+    /** @brief Gets depth image. */
+    VkImage getDepthImage() const { return depthImage; }
+    /** @brief Gets depth format. */
+    VkFormat getDepthFormat() const { return depthFormat; }
 
 private:
     /** @brief Reference to logical device. */

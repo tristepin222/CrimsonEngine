@@ -117,11 +117,6 @@ namespace Engine {
         // Upload texture & update descriptor set
         renderer.resourceManager->updateMaterialDescriptorSet(*mat, renderer);
 
-        // 4. Apply sort order to Transform.z
-        if (auto* t = registry.get<Transform>(entity)) {
-            t->position.z = sprite.sortOrder * 0.0001f;
-        }
-
         // Track applied state
         sprite._loadedTexturePath = sprite.texturePath;
         sprite._lastFlipX         = sprite.flipX;
@@ -163,11 +158,8 @@ namespace Engine {
             changed = true;
         }
 
-        // Sync sort order to Transform.z
+        // Sync sort order
         if (sprite.sortOrder != sprite._lastSortOrder) {
-            if (auto* t = registry.get<Transform>(entity)) {
-                t->position.z = sprite.sortOrder * 0.0001f;
-            }
             sprite._lastSortOrder = sprite.sortOrder;
             changed = true;
         }

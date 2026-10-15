@@ -20,8 +20,8 @@ layout(location = 0) out vec4 outColor;
 
 void main() {
     vec4 baseColor = texture(texSampler, vUV) * vColor;
-    // Do NOT discard — allow the GPU alpha blend stage to handle full transparency.
-    // The pipeline has VK_BLEND_FACTOR_SRC_ALPHA / VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA
-    // so semi-transparent pixels blend correctly against the framebuffer.
+    if (baseColor.a < 0.01) {
+        discard;
+    }
     outColor = baseColor;
 }

@@ -25,6 +25,8 @@ namespace Engine {
         std::string texturePath;
         /** @brief True = solid collider spawned for cells containing this tile. */
         bool isSolid = false;
+        /** @brief RGBA tint color multiplier for this tile. */
+        glm::vec4 colorTint{ 1.f, 1.f, 1.f, 1.f };
 
         // --- Infinite palette grid position (persisted) ---
         /** @brief Column on the infinite palette grid (can be negative). */
@@ -71,6 +73,7 @@ namespace Engine {
             /** @brief Vulkan descriptor set with single-texture binding (for ImGui/UI). */
             VkDescriptorSet singleDescriptorSet = VK_NULL_HANDLE;
             bool valid = false;
+            bool atlasBuilt = false;
         };
         AtlasCache atlas;
 
@@ -136,6 +139,11 @@ namespace Engine {
      *        The TilemapSystem uses this to avoid reloading/repacking every frame.
      */
     ENGINE_API std::unordered_map<std::string, TilesetAsset>& getTilesetCache();
+
+    /**
+     * @brief Resolves a tile texture path against common asset locations and tileset relative directories.
+     */
+    ENGINE_API std::string resolveTileTexturePath(const std::string& rawPath, const std::string& tilesetPath = "");
 
     /**
      * @brief Loads a TilesetAsset from disk (or returns a cached copy).

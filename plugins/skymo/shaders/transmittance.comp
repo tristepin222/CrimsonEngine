@@ -1,0 +1,117 @@
+#version 450
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+struct DensityLayer {
+    float width;
+    float expTerm;
+    float expScale;
+    float linearTerm;
+    float constantTerm;
+    float pad0;
+    float pad1;
+    float pad2;
+};
+
+layout(std140, set = 0, binding = 0) uniform AtmosphereUBO {
+    vec4 solarIrradiance;      // xyz: irradiance, w: sunAngularRadius
+    vec4 rayleighScattering;   // xyz: rayleighScattering, w: bottomRadius
+    vec4 rayleighAbsorption;   // xyz: rayleighAbsorption, w: topRadius
+    vec4 mieScattering;        // xyz: mieScattering, w: mieAnisotropy
+    vec4 mieAbsorption;        // xyz: mieAbsorption, w: unused
+    vec4 absorptionExtinction; // xyz: absorptionExtinction, w: unused
+    vec4 groundAlbedo;         // xyz: groundAlbedo, w: unused
+    DensityLayer rayleighDensity[2];
+    DensityLayer mieDensity[2];
+    DensityLayer absorptionDensity[2];
+} u_Atmosphere;
+
+layout(set = 0, binding = 1, rgba16f) uniform writeonly image2D outTransmittanceLUT;
+
+float getLayerDensity(DensityLayer layer, float altitude) {
+    return layer.expTerm * exp(layer.expScale * altitude) + layer.linearTerm * altitude + layer.constantTerm;
+}
+
+float getProfileDensity(DensityLayer layers[2], float altitude) {
+    if (layers[0].width > 0.0) {
+        return altitude < layers[0].width ? getLayerDensity(layers[0], altitude) : getLayerDensity(layers[1], altitude);
+    }
+    return getLayerDensity(layers[0], altitude);
+}
+
+bool raySphereIntersect(vec3 orig, vec3 dir, float radius, out float t0, out float t1) {
+    float b = dot(orig, dir);
+    float c = dot(orig, orig) - radius * radius;
+    float d = b * b - c;
+    if (d < 0.0) return false;
+    float s = sqrt(d);
+    t0 = -b - s;
+    t1 = -b + s;
+    return true;
+}
+
+void uvToTransmittanceParams(vec2 uv, float bottomR, float topR, out float r, out float mu) {
+    float x_mu = uv.x;
+    float x_r = uv.y;
+    
+    float H = sqrt(max(0.0, topR * topR - bottomR * bottomR));
+    float rho = H * x_r;
+    r = sqrt(rho * rho + bottomR * bottomR);
+    
+    float d_min = topR - r;
+    float d_max = rho + H;
+    float d = d_min + x_mu * (d_max - d_min);
+    mu = (d == 0.0) ? 1.0 : (H * H - rho * rho - d * d) / (2.0 * r * d);
+    mu = clamp(mu, -1.0, 1.0);
+}
+
+void main() {
+    ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(outTransmittanceLUT);
+    if (coord.x >= size.x || coord.y >= size.y) return;
+
+    vec2 uv = (vec2(coord) + 0.5) / vec2(size);
+    
+    float bottomR = u_Atmosphere.rayleighScattering.w;
+    float topR = u_Atmosphere.rayleighAbsorption.w;
+    
+    float r, mu;
+    uvToTransmittanceParams(uv, bottomR, topR, r, mu);
+
+    vec3 pos = vec3(0.0, r, 0.0);
+    vec3 dir = vec3(sqrt(max(0.0, 1.0 - mu * mu)), mu, 0.0);
+
+    float t0, t1;
+    if (!raySphereIntersect(pos, dir, topR, t0, t1) || t1 <= 0.0) {
+        imageStore(outTransmittanceLUT, coord, vec4(1.0));
+        return;
+    }
+    
+    float tGround0, tGround1;
+    bool hitGround = raySphereIntersect(pos, dir, bottomR, tGround0, tGround1) && tGround0 > 0.0;
+    float maxDist = hitGround ? tGround0 : t1;
+
+    const int SAMPLE_COUNT = 40;
+    float dt = maxDist / float(SAMPLE_COUNT);
+    vec3 opticalDepth = vec3(0.0);
+
+    for (int i = 0; i < SAMPLE_COUNT; ++i) {
+        float t = (float(i) + 0.5) * dt;
+        vec3 samplePos = pos + dir * t;
+        float sampleH = length(samplePos) - bottomR;
+        if (sampleH < 0.0) break;
+
+        float dR = max(0.0, getProfileDensity(u_Atmosphere.rayleighDensity, sampleH));
+        float dM = max(0.0, getProfileDensity(u_Atmosphere.mieDensity, sampleH));
+        float dO = max(0.0, getProfileDensity(u_Atmosphere.absorptionDensity, sampleH));
+
+        vec3 extR = u_Atmosphere.rayleighScattering.xyz * dR;
+        vec3 extM = (u_Atmosphere.mieScattering.xyz + u_Atmosphere.mieAbsorption.xyz) * dM;
+        vec3 extO = u_Atmosphere.absorptionExtinction.xyz * dO;
+
+        opticalDepth += (extR + extM + extO) * dt;
+    }
+
+    vec3 transmittance = exp(-opticalDepth);
+    imageStore(outTransmittanceLUT, coord, vec4(transmittance, 1.0));
+}

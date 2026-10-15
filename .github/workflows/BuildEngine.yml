@@ -56,6 +56,10 @@ jobs:
             --config Release \
             --parallel
 
+      - name: Run Tests
+        run: |
+          ctest --test-dir build -C Release --output-on-failure
+
       - name: Package Assets
         run: |
           mkdir -p CrimsonEngine
@@ -88,7 +92,8 @@ jobs:
       - name: Install Vulkan SDK
         uses: jakoch/install-vulkan-sdk-action@v1
         with:
-          version: 'latest'
+          vulkan_version: 'latest'
+          install_runtime: true
           cache: true
 
       - name: Configure CMake
@@ -98,6 +103,33 @@ jobs:
       - name: Build
         run: |
           cmake --build build --config Release --parallel
+
+      - name: Ensure Vulkan Runtime DLL
+        shell: powershell
+        run: |
+          Write-Host "Locating or acquiring Vulkan Runtime DLL..."
+          $vkDll = Get-ChildItem -Path "C:\VulkanSDK" -Filter "vulkan-1.dll" -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.FullName -match 'x64' } | Select-Object -First 1
+          if (-not $vkDll -and $env:VULKAN_SDK) {
+              $vkDll = Get-ChildItem -Path $env:VULKAN_SDK -Filter "vulkan-1.dll" -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.FullName -match 'x64' } | Select-Object -First 1
+          }
+          if (-not $vkDll) {
+              Write-Host "Vulkan runtime DLL not found in SDK path. Downloading official LunarG runtime package..."
+              curl.exe -L -o vulkan-runtime-components.zip https://sdk.lunarg.com/sdk/download/latest/windows/vulkan-runtime-components.zip
+              Expand-Archive -Path vulkan-runtime-components.zip -DestinationPath vk_rt -Force
+              $vkDll = Get-ChildItem -Path vk_rt -Filter "vulkan-1.dll" -Recurse | Where-Object { $_.FullName -match 'x64' } | Select-Object -First 1
+          }
+          if ($vkDll) {
+              Write-Host "Found Vulkan Runtime DLL at: $($vkDll.FullName)"
+              New-Item -ItemType Directory -Force -Path "build\engine\Release"
+              Copy-Item $vkDll.FullName "build\engine\Release\vulkan-1.dll" -Force -Verbose
+              Copy-Item $vkDll.FullName "C:\Windows\System32\vulkan-1.dll" -Force -ErrorAction SilentlyContinue
+          } else {
+              Write-Error "Failed to locate or download vulkan-1.dll!"
+          }
+
+      - name: Run Tests
+        run: |
+          ctest --test-dir build -C Release --output-on-failure
 
       - name: Package Assets
         shell: powershell
@@ -181,6 +213,10 @@ jobs:
       - name: Build
         run: |
           cmake --build build --config Release --parallel
+
+      - name: Run Tests (Cross-compilation host)
+        run: |
+          echo "Skipping test execution on Windows x86-64 host: cross-compiled ARM64 binaries cannot be executed without native ARM64 hardware or an emulator. Unit tests compilation and linking were verified in the Build step."
 
       - name: Package Assets
         shell: powershell

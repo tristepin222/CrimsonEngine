@@ -222,8 +222,9 @@ namespace Engine {
         uint32_t fromPinId = from->id;
         uint32_t toPinId   = to->id;
 
-        if (NodeLink* existing = findLinkConnectingToInput(toPinId)) {
-            removeLink(existing->id);
+        // Prevent duplicate link between same output and input pin pair
+        for (const auto& l : m_links) {
+            if (l.fromPinId == fromPinId && l.toPinId == toPinId) return;
         }
 
         NodeLink link;
@@ -864,14 +865,16 @@ namespace Engine {
         ImGui::EndChild();
 
         if (ImGui::BeginDragDropTarget()) {
-            if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DND_PAYLOAD_ASSET_PATH")) {
-                if (onCanvasAssetDropped && payload->Data) {
-                    std::string pathStr(static_cast<const char*>(payload->Data));
-                    ImVec2 mousePos = ImGui::GetMousePos();
-                    ImVec2 spawnPos = ImVec2(mousePos.x - canvasPos.x - m_pan.x,
-                                              mousePos.y - canvasPos.y - m_pan.y);
-                    onCanvasAssetDropped(pathStr, spawnPos);
-                }
+            const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DND_PAYLOAD_ASSET_PATH");
+            if (!payload) payload = ImGui::AcceptDragDropPayload("DND_PAYLOAD_MULTI_ASSETS");
+            if (payload && payload->Data && onCanvasAssetDropped) {
+                std::string pathStr(static_cast<const char*>(payload->Data));
+                size_t pipe = pathStr.find('|');
+                if (pipe != std::string::npos) pathStr = pathStr.substr(0, pipe);
+                ImVec2 mousePos = ImGui::GetMousePos();
+                ImVec2 spawnPos = ImVec2(mousePos.x - canvasPos.x - m_pan.x,
+                                          mousePos.y - canvasPos.y - m_pan.y);
+                onCanvasAssetDropped(pathStr, spawnPos);
             }
             ImGui::EndDragDropTarget();
         }

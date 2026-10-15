@@ -63,7 +63,13 @@ void PluginManager::scanDirectory(const std::string& dir, bool isScript) {
         context.imguiContext  = ImGui::GetCurrentContext();
 
         std::cout << "[PluginManager] Initializing: " << pathStr << std::endl;
-        initFunc(&context);
+        try {
+            initFunc(&context);
+        } catch (const std::exception& ex) {
+            std::cerr << "[PluginManager] Exception in initFunc for " << pathStr << ": " << ex.what() << std::endl;
+        } catch (...) {
+            std::cerr << "[PluginManager] Unknown exception in initFunc for " << pathStr << std::endl;
+        }
 
         LoadedPlugin plugin;
         plugin.path         = pathStr;
@@ -121,11 +127,8 @@ void PluginManager::unloadPlugins() {
             context.imguiContext  = ImGui::GetCurrentContext();
             plugin.shutdownFunc(&context);
         }
-#ifdef _WIN32
-        FreeLibrary(plugin.handle);
-#else
-        dlclose(plugin.handle);
-#endif
+        // Note: FreeLibrary during process exit is intentionally omitted when Tracy Profiler is active
+        // to prevent accessing unloaded DLL source location memory addresses during static destruction.
     }
     loadedPlugins.clear();
     std::cout << "[PluginManager] All plugins unloaded." << std::endl;

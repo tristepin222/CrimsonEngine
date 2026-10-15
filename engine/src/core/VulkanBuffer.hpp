@@ -57,6 +57,14 @@ public:
     void uploadData(const void* srcData, VkDeviceSize dataSize);
 
     /**
+     * @brief Maps buffer memory and uploads partial data.
+     * @param srcData Source pointer.
+     * @param offset Byte offset into the destination buffer.
+     * @param dataSize Size of data to transfer in bytes.
+     */
+    void uploadSubData(const void* srcData, VkDeviceSize offset, VkDeviceSize dataSize);
+
+    /**
      * @brief Gets raw Vulkan buffer.
      * @return Vulkan buffer.
      */
@@ -71,6 +79,11 @@ public:
      * @return Size in bytes.
      */
     VkDeviceSize getSize() const { return bufferSize; }
+    /**
+     * @brief Gets pointer to persistently mapped memory (if HOST_VISIBLE).
+     * @return Pointer to mapped memory, or nullptr if not persistently mapped.
+     */
+    void* getMappedData() const { return mappedData; }
 
 private:
     /** @brief Reference to logical device. */
@@ -83,6 +96,8 @@ private:
     VkDeviceMemory memory = VK_NULL_HANDLE;
     /** @brief Size allocated in bytes. */
     VkDeviceSize bufferSize = 0;
+    /** @brief Persistently mapped memory pointer. */
+    void* mappedData = nullptr;
 
     /**
      * @brief Locates suitable memory type.

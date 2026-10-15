@@ -24,7 +24,7 @@ enum class ColliderShape {
  * @struct ColliderComponent
  * @brief Represents a collision volume (Sphere, Axis-Aligned Bounding Box, Oriented Bounding Box, or Capsule).
  */
-// [ReflectClass]
+// [ReflectClass("Physics/Collider")]
 struct ENGINE_API ColliderComponent {
     /** @brief Active primitive collision shape. */
     ColliderShape shape = ColliderShape::AABB;
@@ -41,9 +41,6 @@ struct ENGINE_API ColliderComponent {
     // [ReflectField]
     glm::vec3 offset = glm::vec3(0.0f);
 };
-
-
-REGISTER_COMPONENT(ColliderComponent, "Physics/Collider");
 
 
 

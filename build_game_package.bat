@@ -47,9 +47,12 @@ if exist "%SCRIPT_DIR%bin\game_runtime.exe" (
 REM Copy engine.dll
 copy /Y "%SCRIPT_DIR%engine.dll" "%OUTPUT_PATH%\"
 
-REM Copy engine plugins
+REM Copy engine plugins and project plugins
 if exist "%SCRIPT_DIR%plugins" (
     xcopy /E /Y /I "%SCRIPT_DIR%plugins" "%OUTPUT_PATH%\plugins\"
+)
+if exist "%PROJECT_PATH%\plugins" (
+    xcopy /E /Y /I "%PROJECT_PATH%\plugins" "%OUTPUT_PATH%\plugins\"
 )
 
 REM Copy compiled built-in shaders

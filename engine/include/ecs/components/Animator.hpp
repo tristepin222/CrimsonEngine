@@ -80,7 +80,7 @@ struct AnimationClip {
  * @struct AnimatorComponent
  * @brief Animator controller managing active clips and tracking playback timing.
  */
-// [ReflectClass]
+// [ReflectClass("Animation/Animator")]
 struct AnimatorComponent {
     /** @brief List of all clips loaded from the model asset. */
     std::vector<AnimationClip> animations;
@@ -97,8 +97,5 @@ struct AnimatorComponent {
     // [ReflectField]
     std::string loadedAnimPath;
 };
-
-
-REGISTER_COMPONENT(AnimatorComponent, "Animation/Animator");
 
 

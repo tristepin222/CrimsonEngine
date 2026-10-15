@@ -47,22 +47,24 @@ void PhysgunSystem::update(float dt) {
         bool fDown = renderer.getKey(GLFW_KEY_F);
         if (fDown && !fKeyPressed) {
             fKeyPressed = true;
-            for (auto [vcamEnt, vcam] : registry.view<CinemachineVirtualCamera>()) {
-                if (vcam.active) {
-                    if (vcam.mode == CinemachineMode::ThirdPersonFollow) {
-                        vcam.mode = CinemachineMode::FirstPerson;
-                        vcam.followOffset = glm::vec3(0.0f, 0.0f, 0.0f);
-                        vcam.followDamping = 0.0f;
-                        vcam.lookAtDamping = 0.0f;
-                        std::cout << "[PhysgunScript] Switched camera to First Person." << std::endl;
-                    } else {
-                        vcam.mode = CinemachineMode::ThirdPersonFollow;
-                        vcam.followOffset = glm::vec3(0.0f, 4.0f, 8.0f);
-                        vcam.followDamping = 2.0f;
-                        vcam.lookAtDamping = 2.0f;
-                        std::cout << "[PhysgunScript] Switched camera to Third Person Follow." << std::endl;
+            for (auto [vcamEnt, vcamDummy] : registry.view<CinemachineVirtualCamera>()) {
+                if (auto* vcam = registry.get<CinemachineVirtualCamera>(vcamEnt)) {
+                    if (vcam->active) {
+                        if (vcam->mode == CinemachineMode::ThirdPersonFollow) {
+                            vcam->mode = CinemachineMode::FirstPerson;
+                            vcam->followOffset = glm::vec3(0.0f, 0.0f, 0.0f);
+                            vcam->followDamping = 0.0f;
+                            vcam->lookAtDamping = 0.0f;
+                            std::cout << "[PhysgunScript] Switched camera to First Person." << std::endl;
+                        } else {
+                            vcam->mode = CinemachineMode::ThirdPersonFollow;
+                            vcam->followOffset = glm::vec3(0.0f, 4.0f, 8.0f);
+                            vcam->followDamping = 2.0f;
+                            vcam->lookAtDamping = 2.0f;
+                            std::cout << "[PhysgunScript] Switched camera to Third Person Follow." << std::endl;
+                        }
+                        break;
                     }
-                    break;
                 }
             }
         } else if (!fDown) {

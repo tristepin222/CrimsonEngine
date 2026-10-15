@@ -2,6 +2,7 @@
 
 #include <string>
 #include <vector>
+#include <glm/glm.hpp>
 #include "ecs/Entity.hpp"
 #include "ecs/Registry.hpp"
 
@@ -51,6 +52,16 @@ public:
      * @return True if load was successful.
      */
     virtual bool loadFromFile(const std::string& path);
+
+    /**
+     * @brief Gets the file path of this scene.
+     */
+    const std::string& getPath() const { return currentPath; }
+
+    /**
+     * @brief Sets the file path of this scene.
+     */
+    void setPath(const std::string& path) { currentPath = path; }
     /**
      * @brief Helper to spawn primitive geometric entities.
      * @param primitiveType Kind of primitive (Triangle, Cube, Quad).
@@ -75,6 +86,15 @@ public:
      * @return True if successfully deleted.
      */
     virtual bool deleteEntity(Entity entity);
+
+    /**
+     * @brief Instantiates a prefab asset file into the scene at a given world position.
+     * @param prefabPath Path to the .prefab asset file.
+     * @param position Target 3D position (defaults to origin).
+     * @param parentEntity Optional parent entity to attach under.
+     * @return The spawned root Entity handle.
+     */
+    virtual Entity instantiatePrefab(const std::string& prefabPath, const glm::vec3& position = glm::vec3(0.0f), Entity parentEntity = Entity());
 
     /**
      * @brief Tracks an entity under scene ownership.
@@ -107,6 +127,8 @@ protected:
     Registry& registry;
     /** @brief Reference to Vulkan renderer. */
     VulkanRenderer& renderer;
+    /** @brief Current file path of the loaded scene. */
+    std::string currentPath;
 
 private:
     /** @brief List of entities owned by this scene. */

@@ -53,6 +53,7 @@ set(ENGINE_SOURCES
     src/ecs/EntityFactory.cpp
     src/ecs/EntityCloner.cpp
     src/ecs/Registry.cpp
+    src/profiler/Profiler.cpp
     src/ecs/systems/PlayerControllerSystem.cpp
     src/editor/EditorUI.cpp
     src/editor/EditorUIPanels.cpp
@@ -70,6 +71,7 @@ set(ENGINE_SOURCES
     src/scenes/SceneSerializer.cpp
     src/scenes/TilesetAsset.cpp
     src/renderer/ResourceManager.cpp
+    src/renderer/ShaderCompiler.cpp
     src/meta/ComponentReflection.cpp
     src/meta/engine_generated_reflection.cpp
 
@@ -79,8 +81,11 @@ set(ENGINE_SOURCES
     src/miniaudio.cpp
     src/ecs/systems/AudioSystem.cpp
     src/ecs/systems/TilemapSystem.cpp
+    src/ecs/systems/TerrainSystem.cpp
     src/ecs/systems/UISystem.cpp
     src/ecs/systems/SpriteSystem.cpp
+    src/ecs/systems/GridWorldSystem.cpp
+    src/ui/UIBuilder.cpp
 )
 
 add_library(engine SHARED ${ENGINE_SOURCES})
@@ -108,7 +113,10 @@ target_link_libraries(engine PUBLIC
     Vulkan::Vulkan
     imgui
     imguizmo
+PRIVATE
+    Tracy::TracyClient
 )
+target_compile_definitions(engine PRIVATE TRACY_ENABLE TRACY_ON_DEMAND)
 
 # --- Builtin Shaders Compilation ---
 # Compile grid.vert, grid.frag, unlit.vert, unlit.frag into SPIR-V.
@@ -142,6 +150,18 @@ compile_builtin_shader("${CMAKE_CURRENT_SOURCE_DIR}/builtin_shaders/lit.frag")
 compile_builtin_shader("${CMAKE_CURRENT_SOURCE_DIR}/builtin_shaders/skinned_lit.vert")
 compile_builtin_shader("${CMAKE_CURRENT_SOURCE_DIR}/builtin_shaders/sprite.vert")
 compile_builtin_shader("${CMAKE_CURRENT_SOURCE_DIR}/builtin_shaders/sprite.frag")
+compile_builtin_shader("${CMAKE_CURRENT_SOURCE_DIR}/builtin_shaders/shadow.vert")
+compile_builtin_shader("${CMAKE_CURRENT_SOURCE_DIR}/builtin_shaders/skinned_shadow.vert")
+compile_builtin_shader("${CMAKE_CURRENT_SOURCE_DIR}/builtin_shaders/tonemap.vert")
+compile_builtin_shader("${CMAKE_CURRENT_SOURCE_DIR}/builtin_shaders/tonemap.frag")
+compile_builtin_shader("${CMAKE_CURRENT_SOURCE_DIR}/builtin_shaders/terrain.vert")
+compile_builtin_shader("${CMAKE_CURRENT_SOURCE_DIR}/builtin_shaders/terrain.frag")
+compile_builtin_shader("${CMAKE_CURRENT_SOURCE_DIR}/builtin_shaders/foliage.vert")
+compile_builtin_shader("${CMAKE_CURRENT_SOURCE_DIR}/builtin_shaders/foliage.frag")
+compile_builtin_shader("${CMAKE_CURRENT_SOURCE_DIR}/builtin_shaders/pixelate.frag")
+compile_builtin_shader("${CMAKE_CURRENT_SOURCE_DIR}/builtin_shaders/grayscale.frag")
+compile_builtin_shader("${CMAKE_CURRENT_SOURCE_DIR}/builtin_shaders/ssao.frag")
+compile_builtin_shader("${CMAKE_CURRENT_SOURCE_DIR}/builtin_shaders/ssao_blur.frag")
 
 # Target for builtin shaders compilation
 add_custom_target(compile_builtin_shaders ALL DEPENDS ${BUILTIN_SHADERS_SPV})
@@ -157,6 +177,28 @@ target_include_directories(editor PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 if(MSVC)
     target_compile_options(editor PRIVATE /Zi)
     target_link_options(editor PRIVATE /DEBUG)
+endif()
+
+if(WIN32)
+    # Ensure Vulkan runtime DLL is copied to engine binary dir for tests if available in SDK
+    find_file(Vulkan_RUNTIME_DLL NAMES vulkan-1.dll
+        HINTS
+            ENV VULKAN_SDK
+            "$ENV{VULKAN_SDK}/runtime/x64"
+            "$ENV{VULKAN_SDK}/Bin"
+            "C:/VulkanSDK"
+        PATH_SUFFIXES
+            "runtime/x64"
+            "Bin"
+            "RunTimeInstaller/x64"
+    )
+    if(Vulkan_RUNTIME_DLL)
+        add_custom_command(
+            TARGET engine POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${Vulkan_RUNTIME_DLL}" "$<TARGET_FILE_DIR:engine>/"
+            COMMENT "Copying vulkan-1.dll to engine binary directory..."
+        )
+    endif()
 endif()
 
 add_custom_command(
@@ -205,9 +247,15 @@ if(NOT CMAKE_GENERATOR_PLATFORM MATCHES "ARM")
     )
 endif()
 
+# --- Unit & Regression Tests Executable ---
+add_executable(engine_tests "${CMAKE_CURRENT_SOURCE_DIR}/../tests/unit_tests.cpp")
+target_link_libraries(engine_tests PRIVATE engine)
+target_include_directories(engine_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+if(NOT CMAKE_GENERATOR_PLATFORM MATCHES "ARM" AND NOT CMAKE_CROSSCOMPILING)
+    add_test(NAME EngineUnitTests COMMAND engine_tests)
+    set_tests_properties(EngineUnitTests PROPERTIES
+        WORKING_DIRECTORY "$<TARGET_FILE_DIR:engine_tests>"
+    )
+endif()
 
-
-
-
-
-message(STATUS "Configured editor, game_runtime, and reflection_generator executables")
+message(STATUS "Configured editor, game_runtime, reflection_generator, and engine_tests executables")

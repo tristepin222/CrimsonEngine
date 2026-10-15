@@ -2,12 +2,8 @@
   "scene": "TestScene",
   "entities": [
     {
+      "id": 9979,
       "name": "Grid",
-      "transform": {
-        "position": [-3.10212, -3.68839e-06, -2.94431],
-        "rotation": [-90, 0, 0],
-        "scale": [1, 1, 1]
-      },
       "components": {
         "Grid": {
 "entityType": "Grid",
@@ -25,17 +21,14 @@
           },
 "Transform": {
             "position": [-3.10212, -3.68839e-06, -2.94431],
+            "rotation": [-90, 0, 0],
             "scale": [1, 1, 1]
           }
       }
     },
     {
+      "id": 9980,
       "name": "Camera",
-      "transform": {
-        "position": [-3.21228, 2.04259, -0.663726],
-        "rotation": [-25.9, 249.771, 0],
-        "scale": [1, 1, 1]
-      },
       "components": {
         "Camera": {
 "entityType": "Camera",
@@ -47,18 +40,11 @@
           "moveSpeed": 5,
           "mouseSensitivity": 0.1
         },
-"Transform": {
-            "position": [-3.21228, 2.04259, -0.663726],
-            "scale": [1, 1, 1]
-          },
-"Input": {
-            "movement": [0, 0, 0],
-            "look": [0, 0]
-          },
 "CinemachineVirtualCamera": {
             "followTargetName": "Player",
             "lookAtTargetName": "Player",
             "lockToBone": "Head",
+            "mode": "Third Person Follow",
             "mouseOrbit": 1.0,
             "mouseLook": 1.0,
             "orbitSensitivity": 0.1,
@@ -72,22 +58,27 @@
             "fov": 45,
             "priority": 10,
             "active": 1.0
+          },
+"Input": {
+            "movement": [0, 0, 0],
+            "look": [0, 0]
+          },
+"Transform": {
+            "position": [-3.28617, 4.58501, 7.32406],
+            "rotation": [-26.5651, -90, 0],
+            "scale": [1, 1, 1]
           }
       }
     },
     {
+      "id": 9981,
       "name": "Floor",
-      "transform": {
-        "position": [0, 0.135158, 0],
-        "rotation": [0, 0, 0],
-        "scale": [10, 1, 10]
-      },
       "components": {
         "Primitive": {
 "entityType": "Primitive",
           "primitive": "Cube",
           "color": [1, 1, 1, 1],
-          "shaderName": "Unlit",
+          "shaderName": "Lit",
           "roughness": 0.5,
           "metallic": 0
         },
@@ -106,7 +97,7 @@
 "Material": {
             "color": [1, 1, 1, 1],
             "texturePath": "",
-            "shaderName": "Unlit",
+            "shaderName": "Lit",
             "normalMapPath": "",
             "metallicMapPath": "",
             "roughness": 0.5,
@@ -114,17 +105,14 @@
           },
 "Transform": {
             "position": [0, 0.135158, 0],
+            "rotation": [0, 0, 0],
             "scale": [10, 1, 10]
           }
       }
     },
     {
+      "id": 9982,
       "name": "Player",
-      "transform": {
-        "position": [-3.28617, 0.585006, -0.675942],
-        "rotation": [0, -159.771, 0],
-        "scale": [1, 1, 1]
-      },
       "components": {
         "Primitive": {
 "entityType": "Primitive",
@@ -183,12 +171,11 @@
             "roughness": 0.5,
             "metallic": 0
           },
-"Transform": {
-            "position": [-3.28617, 0.585006, -0.675942],
-            "scale": [1, 1, 1]
-          },
-"Skeleton": {
-
+"PlayerController": {
+            "speed": 5,
+            "jumpForce": 6,
+            "interactRange": 3,
+            "orientToMovement": 1.0
           },
 "RigidBody": {
             "mass": 1,
@@ -209,30 +196,19 @@
             "freezeRotationY": 0.0,
             "freezeRotationZ": 1.0
           },
-"PlayerController": {
-            "speed": 5,
-            "jumpForce": 6,
-            "interactRange": 3,
-            "orientToMovement": 1.0
+"Skeleton": {
+
           },
-"PhysgunScript": {
-            "Kp": 450,
-            "Kd": 25,
-            "holdDistance": 5,
-            "isHolding": 0.0,
-            "currentHoldDistance": 0,
-            "debugShowRay": 0.0,
-            "originEntity": 2560
+"Transform": {
+            "position": [-3.28617, 0.585006, -0.675942],
+            "rotation": [0, -159.771, 0],
+            "scale": [1, 1, 1]
           }
       }
     },
     {
+      "id": 9983,
       "name": "Cube 2",
-      "transform": {
-        "position": [-0.270498, 2.24277, -2.73666],
-        "rotation": [-170.846, -84.429, -147.309],
-        "scale": [0.999967, 0.949995, 2.69982]
-      },
       "components": {
         "Primitive": {
 "entityType": "Primitive",
@@ -265,17 +241,14 @@
           },
 "Transform": {
             "position": [-0.270498, 2.24277, -2.73666],
+            "rotation": [-170.846, -84.429, -147.309],
             "scale": [0.999967, 0.949995, 2.69982]
           }
       }
     },
     {
+      "id": 9984,
       "name": "Cube 3",
-      "transform": {
-        "position": [-3.70081, 1.1349, -2.03862],
-        "rotation": [-0.00242605, -4.85058, 0.00190451],
-        "scale": [1, 1, 1]
-      },
       "components": {
         "Primitive": {
 "entityType": "Primitive",
@@ -306,10 +279,6 @@
             "roughness": 0.5,
             "metallic": 0
           },
-"Transform": {
-            "position": [-3.70081, 1.1349, -2.03862],
-            "scale": [1, 1, 1]
-          },
 "RigidBody": {
             "mass": 1,
             "velocity": [0, 0, 0],
@@ -328,16 +297,17 @@
             "freezeRotationX": 0.0,
             "freezeRotationY": 0.0,
             "freezeRotationZ": 0.0
+          },
+"Transform": {
+            "position": [-3.70081, 1.1349, -2.03862],
+            "rotation": [-0.00242605, -4.85058, 0.00190451],
+            "scale": [1, 1, 1]
           }
       }
     },
     {
+      "id": 9985,
       "name": "Empty GameObject",
-      "transform": {
-        "position": [-1.13249e-06, 1.55424, 2.6226e-06],
-        "rotation": [0, 0, 0],
-        "scale": [1, 1, 1]
-      },
       "components": {
         "Hierarchy": {
 "entityType": "Hierarchy",
@@ -345,17 +315,14 @@
         },
 "Transform": {
             "position": [-1.13249e-06, 1.55424, 2.6226e-06],
+            "rotation": [0, 0, 0],
             "scale": [1, 1, 1]
           }
       }
     },
     {
+      "id": 9986,
       "name": "Empty GameObject 1",
-      "transform": {
-        "position": [-0.191151, 0.531807, -0.701962],
-        "rotation": [0, 0, 0],
-        "scale": [1, 1, 1]
-      },
       "components": {
         "Tilemap": {
 "entityType": "Tilemap",
@@ -363,7 +330,18 @@
           "height": 10,
           "tileSize": 1,
           "tilesetPath": "assets/tilesets/NewTileset.tileset",
-          "tiles": [-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 1, 1, 1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 0, -1, -1, -1, -1, -1, -1, -1, 1, -1, -1, -1, 0, -1, -1, -1, -1, -1, -1, 1, 1, 1, 1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1]
+          "layers": [
+            {
+              "name": "Ground",
+              "zOffset": 0,
+              "tag": "ground",
+              "isVisible": true,
+              "isCollision": false,
+              "chunks": [
+              ]
+            }
+          ]
+
         },
 "Material": {
             "color": [1, 1, 1, 1],
@@ -376,37 +354,59 @@
           },
 "Transform": {
             "position": [-0.191151, 0.531807, -0.701962],
+            "rotation": [0, 0, 0],
             "scale": [1, 1, 1]
           }
       }
     },
     {
-      "name": "Empty GameObject 2",
-      "transform": {
-        "position": [-3.18432, 2.52483, -1.85697],
-        "rotation": [0, 0, 0],
-        "scale": [1, 1, 1]
-      },
+      "id": 9987,
+      "name": "Light",
       "components": {
+"Light": {
+            "type": "Directional",
+            "direction": [-0, -0.707107, 0.707107],
+            "pitch": 45,
+            "yaw": 0,
+            "color": [1, 1, 1],
+            "intensity": 1,
+            "range": 10,
+            "castShadows": true,
+            "shadowBias": 0.0005,
+            "shadowNormalBias": 1.5,
+            "shadowDistance": 80
+          },
 "Transform": {
-            "position": [-3.18432, 2.52483, -1.85697],
+            "position": [-3.00916, 1.91593, -1.39686],
+            "rotation": [0, 0, 0],
             "scale": [1, 1, 1]
           }
       }
     },
     {
+      "id": 9988,
       "name": "Canvas",
       "components": {
 "Transform": {
             "position": [0, 0, 0],
+            "rotation": [0, 0, 0],
             "scale": [1, 1, 1]
           },
 "Canvas": {
-            "isScreenSpace": 1.0
+            "isScreenSpace": 1.0,
+            "isVisible": 1.0
+          },
+"RectTransform": {
+            "anchorMin": [0.5, 0.5],
+            "anchorMax": [0.5, 0.5],
+            "anchoredPosition": [0, 0],
+            "sizeDelta": [100, 100],
+            "pivot": [0.5, 0.5]
           }
       }
     },
     {
+      "id": 9989,
       "name": "Panel",
       "components": {
         "Hierarchy": {
@@ -427,6 +427,7 @@
       }
     },
     {
+      "id": 9990,
       "name": "Grid Layout",
       "components": {
         "Hierarchy": {
@@ -447,11 +448,13 @@
 "UIGridLayoutGroup": {
             "cellSize": [90, 90],
             "spacing": [10, 10],
-            "padding": [10, 10, 10, 10]
+            "padding": [10, 10, 10, 10],
+            "constraintCount": 3
           }
       }
     },
     {
+      "id": 9991,
       "name": "Button",
       "components": {
         "Hierarchy": {
@@ -476,6 +479,7 @@
       }
     },
     {
+      "id": 9992,
       "name": "Panel 1",
       "components": {
         "Hierarchy": {
@@ -496,6 +500,7 @@
       }
     },
     {
+      "id": 9993,
       "name": "Slider",
       "components": {
         "Hierarchy": {
@@ -520,6 +525,7 @@
       }
     },
     {
+      "id": 9994,
       "name": "Panel 2",
       "components": {
         "Hierarchy": {
@@ -540,12 +546,8 @@
       }
     },
     {
+      "id": 9995,
       "name": "Camera 1",
-      "transform": {
-        "position": [1.05, 2.8, 42.5],
-        "rotation": [0, -90, 0],
-        "scale": [1, 1, 1]
-      },
       "components": {
         "Camera": {
 "entityType": "Camera",
@@ -557,23 +559,20 @@
           "moveSpeed": 5,
           "mouseSensitivity": 0.1
         },
-"Transform": {
-            "position": [1.05, 2.8, 42.5],
-            "scale": [1, 1, 1]
-          },
 "Input": {
             "movement": [0, 0, 0],
             "look": [0, 0]
+          },
+"Transform": {
+            "position": [1.05, 2.8, 42.5],
+            "rotation": [0, -90, 0],
+            "scale": [1, 1, 1]
           }
       }
     },
     {
+      "id": 9996,
       "name": "Empty GameObject 3",
-      "transform": {
-        "position": [0, 1.94254, 0],
-        "rotation": [0, 0, 0],
-        "scale": [1, 1, 1]
-      },
       "components": {
         "AnimationController": {
 "entityType": "AnimationController",
@@ -611,22 +610,19 @@
             "roughness": 1,
             "metallic": 1
           },
-"Transform": {
-            "position": [0, 1.94254, 0],
-            "scale": [1, 1, 1]
-          },
 "Skeleton": {
 
+          },
+"Transform": {
+            "position": [0, 1.94254, 0],
+            "rotation": [0, 0, 0],
+            "scale": [1, 1, 1]
           }
       }
     },
     {
+      "id": 9997,
       "name": "Cube",
-      "transform": {
-        "position": [2.71537, 2.68265, -0.202717],
-        "rotation": [0, 0, 0],
-        "scale": [1, 1, 1]
-      },
       "components": {
         "Primitive": {
 "entityType": "Primitive",
@@ -636,6 +632,12 @@
           "roughness": 0.5,
           "metallic": 0
         },
+"AStarAgent": {
+            "targetTransform": 4.29497e+09,
+            "speed": 2,
+            "allowDiagonal": 1.0,
+            "showDebugPath": 1.0
+          },
 "Material": {
             "color": [0, 1, 0, 1],
             "texturePath": "",
@@ -647,13 +649,110 @@
           },
 "Transform": {
             "position": [2.71537, 2.68265, -0.202717],
+            "rotation": [0, 0, 0],
             "scale": [1, 1, 1]
+          }
+      }
+    },
+    {
+      "id": 9998,
+      "name": "sky",
+      "components": {
+"Atmosphere": {
+            "bottomRadius": 6.371e+06,
+            "topRadius": 6.471e+06,
+            "rayleighScattering": [5.802e-06, 1.3558e-05, 3.31e-05],
+            "rayleighAbsorption": [0, 0, 0],
+            "mieScattering": [3.996e-06, 3.996e-06, 3.996e-06],
+            "mieAbsorption": [4.4e-06, 4.4e-06, 4.4e-06],
+            "absorptionExtinction": [0, 0, 0],
+            "rayleighDensity": {
+              "layers[0]": {
+                "width": 0,
+                "expTerm": 1,
+                "expScale": -0.000125,
+                "linearTerm": 0,
+                "constantTerm": 0
+              },
+              "layers[1]": {
+                "width": 0,
+                "expTerm": 0,
+                "expScale": 0,
+                "linearTerm": 0,
+                "constantTerm": 0
+              }
+            },
+            "mieDensity": {
+              "layers[0]": {
+                "width": 0,
+                "expTerm": 1,
+                "expScale": -0.000833333,
+                "linearTerm": 0,
+                "constantTerm": 0
+              },
+              "layers[1]": {
+                "width": 0,
+                "expTerm": 0,
+                "expScale": 0,
+                "linearTerm": 0,
+                "constantTerm": 0
+              }
+            },
+            "absorptionDensity": {
+              "layers[0]": {
+                "width": 25000,
+                "expTerm": 0,
+                "expScale": 0,
+                "linearTerm": 6.66667e-05,
+                "constantTerm": 0
+              },
+              "layers[1]": {
+                "width": 15000,
+                "expTerm": 0,
+                "expScale": 0,
+                "linearTerm": -6.66667e-05,
+                "constantTerm": 1
+              }
+            },
+            "groundAlbedo": [0.1, 0.1, 0.1],
+            "solarIrradiance": [1, 1, 1],
+            "sunAngularRadius": 0.004675,
+            "mieAnisotropy": 0.8,
+            "enableScattering": 1.0,
+            "enableOzone": 1.0
           },
-"AStarAgent": {
-            "targetX": 0,
-            "targetY": 5,
-            "allowDiagonal": 1.0,
-            "showDebugPath": 1.0
+"VolumetricFog": {
+            "enabled": 1.0,
+            "mode": "Atmospheric Haze",
+            "affectSky": 1.0,
+            "isGlobal": 1.0,
+            "maxDistance": 3000,
+            "startDistance": 0,
+            "densityMultiplier": 0.1,
+            "fogColorTint": [1, 1, 1],
+            "anisotropy": 0.8,
+            "baseHeight": 0,
+            "heightFalloff": 0.01,
+            "groundSunAttenuation": 1
+          },
+"Weather": {
+            "type": "Rain",
+            "precipitationIntensity": 0.75,
+            "wetness": 0.8,
+            "autoWetness": 1.0,
+            "dryingSpeed": 0.04,
+            "wetnessAccumSpeed": 0.12,
+            "enableLightning": 1.0,
+            "lightningFrequency": 6.0,
+            "lightningIntensity": 1.0,
+            "enableAudio": 1.0,
+            "rainVolume": 0.7,
+            "thunderVolume": 0.9
+          },
+"Transform": {
+            "position": [0, 0, 0],
+            "rotation": [0, 0, 0],
+            "scale": [1, 1, 1]
           }
       }
     }

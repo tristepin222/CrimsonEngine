@@ -1,74 +1,98 @@
 # Custom Entity-Component System (ECS)
 
-This document provides a technical deep-dive into the engine's custom, header-only Entity-Component System (ECS). The ECS is designed from scratch to prioritize cache locality, fast component lookups, generational entity recycling, and compile-time template queries.
+This document provides a technical deep-dive into the engine's custom, production-ready Entity-Component System (ECS). The ECS is designed from scratch to prioritize cache locality, ultra-fast sparse-set lookups, strict generational entity recycling, compile-time template queries, deferred command buffering, staged system execution, and multi-threaded parallel iteration.
 
 ![ECS Structure](diagrams/out/ecs_structure/ECSStructure.png)
 
 ---
 
-## Entity Allocation & Recycling
+## 1. Dynamic Entity Allocation & Generational Recycling
 
-The [Entity](../engine/include/ecs/Entity.hpp) class is a simple 32-bit wrapper around an integer identifier (`uint32_t`). To prevent fragmentation and maintain strict bounds, entity lifetime is governed by the [EntityManager](../engine/include/ecs/EntityManager.hpp).
+The [Entity](../engine/include/ecs/Entity.hpp) class is a 32-bit generational handle combining a 24-bit numeric identifier with an 8-bit generation counter (`uint32_t` bit-packed). This protects against dangling references when an entity ID is recycled.
 
-*   **Max Entities**: The system caps the active entity list to `10,000` (defined by `MAX_ENTITIES`).
-*   **Recycling Queue**: Free entity IDs are stored in a `std::stack<uint32_t>`. When an entity is destroyed, its ID is recycled back to the stack, making it available for subsequent allocations.
-*   **Component Mask**: The `EntityManager` allocates an array of 64-bit masks (`std::bitset<64> ComponentMask`). Each bit represents whether an entity owns a specific component type.
+Lifetime and allocation are managed by [EntityManager.hpp](../engine/include/ecs/EntityManager.hpp):
+
+*   **Dynamic Scalability (No Static Limit)**: Unlike earlier prototypes constrained by a static `MAX_ENTITIES = 10000`, the manager dynamically scales its capacity on demand with a monotonically increasing `nextId` counter and exponential growth.
+*   **Recycling Queue**: Recycled entity indices are stored in a `std::stack<Entity::IdType> freeIds`. When an entity is destroyed, its generation counter increments (`generations[id]++`), and its index is returned to the pool.
+*   **Dense Alive Tracking & $O(1)$ Swap-Remove**: The manager maintains a packed `std::vector<uint32_t> alive` array of active entity IDs, paired with an inverse index vector `entityToAliveIndex`. Deleting an entity performs a true $O(1)$ swap-and-pop:
+    ```cpp
+    uint32_t removedIdx = entityToAliveIndex[id];
+    uint32_t lastId = alive.back();
+    alive[removedIdx] = lastId;
+    entityToAliveIndex[lastId] = removedIdx;
+    alive.pop_back();
+    ```
+    This guarantees that retrieving active entities (`getAlive()`) is completely contiguous with zero empty slot iterations.
+*   **Generational Mask Accessors**: Accessing masks via `getMask(Entity e)` validates that `e` is currently alive and that its generation matches. If a stale or invalid handle is passed, it throws a `std::runtime_error`. Non-throwing lookup is provided via `tryGetMask(Entity e)`.
 
 ---
 
-## ComponentStorage & The Swap-Remove Pattern
+## 2. Dynamic Sparse Set Storage & Generational Safety (`ComponentStorage`)
 
-Components are pure data structures with no behavior. To avoid CPU cache misses, components are stored contiguously in memory inside [ComponentStorage.hpp](../engine/include/ecs/ComponentStorage.hpp).
+Components are pure plain-old-data (POD) structures. To achieve optimal cache locality while avoiding wasteful memory overhead, [ComponentStorage.hpp](../engine/include/ecs/ComponentStorage.hpp) implements a **Dynamic Sparse Set** architecture:
 
 ```cpp
 template<typename T>
 class ComponentStorage : public IStorage {
 private:
-    std::vector<T> data;                              // Contiguous component data
-    std::vector<Entity> entities;                     // Parallel vector tracking entity ownership
-    std::unordered_map<Entity, size_t> entityToIndex; // O(1) Index lookup map
+    std::vector<T> dense;                             // Contiguous, tightly packed component data
+    std::vector<Entity> entities;                     // Parallel vector tracking owning entities
+    std::vector<uint32_t> sparse;                     // Dynamic sparse map: Entity ID -> Dense Index
 };
 ```
 
-### The Swap-Remove Mechanics
+### Strict Generational Enforcement at Every Access Point
 
-When a component is removed from an entity, removing from a middle index in a `std::vector` would shift all subsequent elements, which is an \(O(N)\) cost. 
+To prevent subtle bugs where a stale entity handle accesses or corrupts components belonging to a newly recycled entity with the same numeric ID:
 
-To achieve \(O(1)\) deletion while maintaining a dense, contiguous array, the storage implements the **Swap-Remove** (or swap-and-pop) pattern:
-1.  Locate the index of the component to delete via the `entityToIndex` map.
-2.  Swap this component with the *last* component in the vector.
-3.  Swap the corresponding entry in the parallel `entities` vector.
-4.  Update the swapped entity's index in the `entityToIndex` map to its new position.
-5.  Call `.pop_back()` on both vectors to remove the target component in \(O(1)\).
-
-This keeps data perfectly aligned, contiguous, and packed tight in RAM, ensuring maximum CPU cache efficiency during serial updates.
+1. **`has(Entity e)`**: Verifies `id < sparse.size() && sparse[id] != INVALID_INDEX && entities[sparse[id]] == e`.
+2. **`add(Entity e, T comp)`**: If the ID slot is occupied (`sparse[id] != INVALID_INDEX`), it validates `entities[denseIdx] == e`. If generations mismatch, it throws `std::runtime_error`, preventing stale handles from overwriting components belonging to new entities.
+3. **`get(Entity e)` / `tryGet(Entity e)`**: Checks `entities[sparse[id]] == e`. Stale handles throw on `get()` or return `nullptr` on `tryGet()`.
+4. **`remove(Entity e)`**: Only removes the component if `entities[sparse[id]] == e`, ensuring a stale handle cannot delete components from a recycled entity.
+5. **`Registry::emplace` / `Registry::emplace_or_replace`**: Validates `entities.isValid(e)` upfront before mutating storage or setting component mask bits.
 
 ---
 
-## Event Subscriptions
+## 3. Thread-Safe Entity Command Buffer (`EntityCommandBuffer`)
 
-The [Registry](../engine/include/ecs/Registry.hpp) allows systems to subscribe to events when components are added or removed:
+Mutating the ECS topology (creating/destroying entities, adding or removing components) while iterating over views or executing systems across worker threads causes race conditions and iterator invalidation.
+
+To make ECS operations production-ready and thread-safe, the engine provides the [`EntityCommandBuffer`](../engine/include/ecs/Registry.hpp):
+
 ```cpp
-using ComponentAddedCallback = std::function<void(Entity)>;
-using ComponentRemovedCallback = std::function<void(Entity)>;
+EntityCommandBuffer ecb;
+
+// Record commands safely inside concurrent worker threads or parallel loops
+ecb.destroyEntity(enemy);
+ecb.addComponent<ExplosionComponent>(posEntity, ExplosionComponent{...});
+ecb.removeComponent<Velocity>(stoppedEntity);
+
+// Play back all recorded mutations sequentially at the frame sync point
+ecb.execute(registry);
 ```
-This is heavily utilized in [RenderSystem.hpp](../engine/include/ecs/systems/RenderSystem.hpp) to automatically manage the rendering queues. When a `Mesh`, `Transform`, or `Material` component is added to an entity, the system caches it. When any of these components are removed, the entity is evicted from the renderer cache:
-```cpp
-registry.subscribeToAdded<Mesh>([this](Entity e) { checkAndAdd(e); });
-registry.subscribeToRemoved<Mesh>([this](Entity e) { removeEntity(e); });
-```
+
+### Critical Concurrency Distinction: Recording vs. Direct Mutation
+* **Thread-Safe Command Recording**: `EntityCommandBuffer` contains an internal `std::mutex` guarding all command recording operations (`destroyEntity`, `addComponent`, `removeComponent`, `setActive`, `clear`). Any number of concurrent worker threads, jobs, or parallel-safe systems can record commands simultaneously into a shared command buffer without race conditions.
+* **Non-Thread-Safe ECS Core**: The command buffer's internal mutex **only** protects its internal recording queue. It does **not** make direct calls to `Registry::create()`, `destroy()`, `emplace()`, `ComponentStorage`, or views thread-safe. Direct ECS mutations and playback (`ecb.execute(registry)`) MUST be performed sequentially on the main thread during designated stage transition sync points (e.g., between `PostUpdate` and `Render`).
+
+### Command Buffer Playback Failure Policy
+In earlier iterations, if a command threw an exception during sequential playback, stack unwinding destroyed the local pending command vector, silently discarding every subsequent command in the batch.
+
+The production-ready command buffer enforces a **non-discarding, exception-safe playback policy**:
+1. **Never Discard Subsequent Commands**: `ecb.execute(Registry& reg, bool throwOnError = false, std::vector<std::exception_ptr>* outErrors = nullptr)` catches exceptions per command. If an invalid or stale entity handle causes a command to fail (e.g., attempting to emplace onto a recycled entity), the error is logged or recorded, and playback immediately continues for all remaining commands in the queue.
+2. **Optional Error Collection & Rethrowing**: Callers can inspect `outErrors` to diagnose which operations failed, or set `throwOnError = true` to rethrow the first encountered exception after all valid commands have completed.
+3. **Queue Invariant**: `execute()` drains the command buffer under the recording lock so newly submitted commands during playback are never lost.
+4. **Dual-Buffer Flush Guarantees**: `SystemManager::flushCommandBuffer(registry, throwOnError)` evaluates both the `SystemManager` command buffer and the `Registry` command buffer completely. An exception in the first buffer never prevents the second buffer from being flushed; errors from both buffers are collected, and the first exception is rethrown only after both buffers have completed playback.
 
 ---
 
-## Compile-Time Multi-Component Views
+## 4. Multi-Component Views & Iteration Strategies
 
-The most powerful feature of the custom ECS is the `Registry::view<Components...>()` query. It extracts a view of entities possessing the specified subset of components.
+Queries in the engine use `Registry::view<Components...>()` to filter entities possessing a specific set of components.
 
 ### Optimization: Smallest Pool Heuristic
 
-To search for entities with components `A`, `B`, and `C`, iterating through all entities in the engine would be highly inefficient. 
-
-Instead, the `Registry` queries the size of each component pool and picks the **smallest storage pool** as the driver. It then iterates through that pool and filters out entities that do not contain the remaining components:
+To query entities having components `A`, `B`, and `C`, the `Registry` inspects the sizes of all participating storage pools and selects the **smallest pool** as the primary driver. Only entities in this driver pool have their component masks tested against the composite bitmask:
 
 ```cpp
 template<typename First, typename Second, typename... Rest>
@@ -81,86 +105,92 @@ IStorage* getSmallestStorage() {
 }
 ```
 
-### Iterator Structured Binding Support
+### Iteration Paradigms
 
-The view provides standard C++ Iterators, allowing systems to use simple range-based for loops with structured bindings:
+#### 1. Range-Based For Loop (Structured Bindings)
+Standard C++ forward iterator supporting concise structured bindings:
 ```cpp
-for (auto [entity, cam, transform, input] : registry.view<Camera, Transform, InputComponent>()) {
-    // Process components directly
-}
-```
-
----
-
-## Structure of Arrays (SoA) Optimizations
-
-To push performance even further for bulk operations (like updating transforms or uploading mesh buffers to the GPU), the engine implements a **Structure of Arrays (SoA)** memory layout in the `soa/` directory.
-
-Unlike Array of Structures (AoS), where each entity holds a packed struct of positions, rotations, scales:
-```cpp
-// AoS Layout (Standard Transform Component)
-struct Transform {
-    glm::vec3 position;
-    glm::vec3 rotation;
-    glm::vec3 scale;
-};
-std::vector<Transform> transforms;
-```
-
-The SoA layout decomposes these fields into separate vectors inside [TransformSoA.hpp](../engine/include/soa/TransformSoA.hpp) and [MeshSoA.hpp](../engine/include/soa/MeshSoA.hpp):
-```cpp
-// SoA Layout
-struct TransformSoA {
-    std::vector<glm::vec3> positions;
-    std::vector<glm::vec3> rotations;
-    std::vector<glm::vec3> scales;
-};
-```
-
-### CPU Cache Line Visual Comparison
-
-```text
-Array of Structures (AoS) - Cache Line Pollution:
-+-----------------------------------------------------------+
-| Entity 0 (Pos) | Entity 0 (Color) | Entity 0 (Name) | ... |
-+-----------------------------------------------------------+
-(When updating positions, the CPU cache line is polluted with unused Colors and Names, wasting memory bandwidth).
-
-Structure of Arrays (SoA) - Cache Friendly:
-+-----------------------------------------------------------+
-| Position 0     | Position 1       | Position 2      | ... |
-+-----------------------------------------------------------+
-(Cache lines contain ONLY position data, guaranteeing a 100% cache hit rate during bulk updates).
-```
-
-### Benefits of SoA in the Engine
-1.  **VRAM Upload Efficiency**: The `MeshSoA` stores vertex and index buffers contiguously, making bulk VRAM uploads via staging buffers highly streamable.
-2.  **Vectorization (SIMD)**: Separate arrays allow modern compilers to auto-vectorize mathematics (like updating positions, physics, or computing bounding matrices), since elements are packed contiguously in cache lines with zero stride.
-3.  **Dynamic Allocations**: The GPU instancing system reads from CPU-side `InstanceDataSoA` models, colors, and material IDs to batch upload GPU instance arrays in a single `vkCmdDrawIndexed` queue preparation loop.
-
----
-
-## Example Usage Code (Registry & Views)
-
-Below is an example showing how to create entities, attach components, and query them using views:
-
-```cpp
-// 1. Create Registry
-Registry registry;
-
-// 2. Spawn Entity
-Entity player = registry.create();
-
-// 3. Attach Components
-registry.emplace<Transform>(player, glm::vec3(0.0f, 0.0f, 0.0f));
-registry.emplace<Mesh>(player, PrimitiveFactory::createCube());
-registry.emplace<Name>(player, "Player");
-
-// 4. Query entities with Transform and Mesh using compile-time Views
 for (auto [entity, transform, mesh] : registry.view<Transform, Mesh>()) {
-    // This loop automatically drives from the smallest component storage pool
-    // and operates directly on contiguous CPU memory pools.
     transform.position.y += 1.0f * dt;
 }
 ```
 
+#### 2. Direct Functional Iteration (`view.each`)
+Bypasses iterator object construction and state machine checking for maximum single-threaded throughput:
+```cpp
+registry.view<Transform, RigidBody>().each([](Entity e, Transform& t, RigidBody& rb) {
+    t.position += rb.velocity * dt;
+});
+```
+
+#### 3. Multi-Threaded Parallel Iteration (`view.eachParallel`)
+Distributes entity chunks across the engine's worker threads via the `JobSystem`:
+```cpp
+registry.view<Transform, ParticleComponent>().eachParallel(
+    jobSystem,
+    [](Entity e, Transform& t, ParticleComponent& p) {
+        p.lifetime -= dt;
+        t.position += p.velocity * dt;
+    },
+    chunkSize /* e.g. 64 entities per worker chunk */
+);
+```
+
+---
+
+## 5. System Execution Pipeline & System Stages
+
+The engine defines a structured system lifecycle via the [`SystemStage`](../engine/include/ecs/System.hpp) enum:
+
+```mermaid
+flowchart LR
+    PreUpdate["1. PreUpdate<br/>(Input, Hardware)"] --> Physics["2. PhysicsUpdate<br/>(RigidBody, Collisions)"]
+    Physics --> Update["3. Update<br/>(Gameplay, Controllers, Animation)"]
+    Update --> PostUpdate["4. PostUpdate<br/>(Camera, Cinemachine, Audio, UI)"]
+    PostUpdate --> Flush["Command Buffer Flush<br/>(ECB Playback)"]
+    Flush --> RenderStage["5. Render<br/>(Scene Draw, Meshes, Post-Process)"]
+```
+
+### Lifecycle Stage Definitions
+
+| Stage | Enum | Purpose | Execution Mode | Standard Systems |
+| :--- | :--- | :--- | :--- | :--- |
+| **Pre-Update** | `SystemStage::PreUpdate` | Process input hardware events, networking packets, and initial frame setup. | Sequential | `InputSystem` |
+| **Physics Update** | `SystemStage::PhysicsUpdate` | Discrete timestep integration, broadphase/narrowphase collision detection, constraint solvers. | Sequential | `PhysicsSystem` |
+| **Update** | `SystemStage::Update` | Core gameplay logic, character controllers, procedural generation, AI pathfinding. | Parallel (`updateStageParallel`) | `PlayerControllerSystem`, `AnimationSystem`, `AStarSystem` |
+| **Post-Update** | `SystemStage::PostUpdate` | Camera tracking, late animation constraints, procedural audio, UI layout reconciliation. | Parallel (`updateStageParallel`) | `CameraSystem`, `CinemachineSystem`, `AudioSystem`, `UISystem` |
+| **Render** | `SystemStage::Render` | Scene rasterization, compute passes, shadow cascades, ImGui overlays. | Sequential | `RenderSystem` |
+
+### Parallel-Safe System Contract (`isParallelSafe()`)
+
+Systems marked with `isParallelSafe() == true` adhere to an explicit concurrency contract:
+1. **Deferred Topology Mutations**: Systems must never directly call `registry.create()`, `registry.destroy()`, or add/remove components during parallel execution. All topology mutations must be recorded via `EntityCommandBuffer`.
+2. **Disjoint Component Access**: Parallel-safe systems within the same stage must operate on mutually disjoint component write sets. Read-only / const component lookups are unrestricted.
+3. **Thread-Safe Command Recording**: All mutations recorded to `systemManager.getCommandBuffer()` or `registry.getCommandBuffer()` are internally synchronized and executed deterministically during `flushCommandBuffer(registry)` before the Render stage.
+
+---
+
+## 6. Deep Entity Cloning (`EntityCloner`)
+
+Duplicating entities with complex hierarchies, multiple components, and GPU resources is handled by [`EntityCloner.hpp`](../engine/include/ecs/EntityCloner.hpp):
+
+1. **Entity Allocation**: Allocates a new entity identifier from `registry.create()`.
+2. **Component Introspection**: Iterates through registered component reflection metadata in `ComponentReflectionRegistry`.
+3. **Data Duplication**: Re-creates components on the clone and performs deep member copying.
+4. **Name Formatting**: Increments duplicate labels (e.g. `"Orc"` becomes `"Orc (Clone)"`).
+5. **GPU Asset Binding**: Safely references shared mesh/texture descriptor sets without triggering redundant VRAM allocations.
+6. **Hierarchy Cloning**: Duplicates child hierarchies attached via `HierarchyComponent`, remapping parent/child references to the newly cloned entities.
+
+---
+
+## 7. Event Subscriptions
+
+The [Registry](../engine/include/ecs/Registry.hpp) allows systems to subscribe to component insertion and deletion events:
+```cpp
+using ComponentAddedCallback = std::function<void(Entity)>;
+using ComponentRemovedCallback = std::function<void(Entity)>;
+
+registry.subscribeToAdded<Mesh>([this](Entity e) { checkAndAdd(e); });
+registry.subscribeToRemoved<Mesh>([this](Entity e) { removeEntity(e); });
+```
+This is utilized by `RenderSystem` and spatial acceleration structures to maintain auxiliary rendering lists without per-frame entity scans.

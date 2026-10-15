@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(EngineWorkspace VERSION 1.4.3 LANGUAGES CXX)
+project(EngineWorkspace VERSION 2.0.0 LANGUAGES CXX)
 
 # Require C++20 standard globally
 set(CMAKE_CXX_STANDARD 20)
@@ -75,10 +75,36 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(miniaudio)
 
+# Fetch Tracy Profiler (v0.14)
+FetchContent_Declare(
+    tracy
+    GIT_REPOSITORY https://github.com/wolfpld/tracy.git
+    GIT_TAG v0.14.0
+    GIT_SHALLOW TRUE
+)
+set(TRACY_ENABLE ON CACHE BOOL "Enable Tracy Profiler" FORCE)
+set(TRACY_ON_DEMAND ON CACHE BOOL "On-demand Tracy profiling" FORCE)
+FetchContent_MakeAvailable(tracy)
+
+# --- Enable Testing ---
+enable_testing()
+
 # --- Add Subdirectories ---
 # sandbox_game is now a standalone project — build it with build_game.bat
 add_subdirectory(engine)
 add_subdirectory(plugins)
+
+if(TARGET editor)
+    if(TARGET cinemachine_plugin)
+        add_dependencies(editor cinemachine_plugin)
+    endif()
+    if(TARGET astar_plugin)
+        add_dependencies(editor astar_plugin)
+    endif()
+    if(TARGET skymo_plugin)
+        add_dependencies(editor skymo_plugin)
+    endif()
+endif()
 
 message(STATUS "Configured engine workspace subdirectories")
 

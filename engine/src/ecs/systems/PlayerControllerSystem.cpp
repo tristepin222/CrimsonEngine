@@ -14,7 +14,7 @@ PlayerControllerSystem::PlayerControllerSystem(Registry& reg, VulkanRenderer& re
     : registry(reg), renderer(renderer), editorMode(editorMode) {}
 
 void PlayerControllerSystem::update(float dt) {
-    if (!editorMode.isPlaying) {
+    if (!editorMode.isPlaying || !editorMode.flyMode) {
         return;
     }
 

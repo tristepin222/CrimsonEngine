@@ -20,7 +20,8 @@ namespace std {
          * @return The computed size_t hash.
          */
         inline std::size_t operator()(const Entity& e) const noexcept {
-            return std::hash<Entity::IdType>{}(e.getId());
+            std::uint64_t combined = (static_cast<std::uint64_t>(e.getId()) << 32) | e.getGeneration();
+            return std::hash<std::uint64_t>{}(combined);
         }
     };
 }

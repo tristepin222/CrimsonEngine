@@ -68,26 +68,29 @@ glm::mat4 getJointWorldMatrix(Registry& registry, Entity entity, const std::stri
     return getEntityWorldMatrix(registry, entity) * modelMatrix;
 }
 
-CinemachineSystem::CinemachineSystem(Registry& reg, VulkanRenderer& renderer, EditorModeState& mode)
-    : registry(reg), editorMode(mode) {}
+CinemachineSystem::CinemachineSystem(Registry& reg, VulkanRenderer& rend, EditorModeState& mode)
+    : registry(reg), renderer(rend), editorMode(mode) {}
 
 void CinemachineSystem::update(float dt) {
     // Resolve targets by name on load or if target IDs are invalid/incorrect
-    for (auto [entity, vcam] : registry.view<CinemachineVirtualCamera>()) {
+    for (auto [entity, vcamDummy] : registry.view<CinemachineVirtualCamera>()) {
+        auto* vcam = registry.get<CinemachineVirtualCamera>(entity);
+        if (!vcam) continue;
+
         // 1. Resolve follow target
         bool needResolveFollow = false;
-        if (vcam.followTarget.getId() == Entity::INVALID_ENTITY || !registry.isValid(vcam.followTarget)) {
+        if (vcam->followTarget.getId() == Entity::INVALID_ENTITY || !registry.isValid(vcam->followTarget)) {
             needResolveFollow = true;
         } else {
-            auto* nameComp = registry.get<Name>(vcam.followTarget);
-            if (!nameComp || nameComp->value != vcam.followTargetName) {
+            auto* nameComp = registry.get<Name>(vcam->followTarget);
+            if (!nameComp || nameComp->value != vcam->followTargetName) {
                 needResolveFollow = true;
             }
         }
-        if (needResolveFollow && !vcam.followTargetName.empty()) {
+        if (needResolveFollow && !vcam->followTargetName.empty()) {
             for (auto [ent, nameComp] : registry.view<Name>()) {
-                if (nameComp.value == vcam.followTargetName) {
-                    vcam.followTarget = ent;
+                if (nameComp.value == vcam->followTargetName) {
+                    vcam->followTarget = ent;
                     break;
                 }
             }
@@ -95,18 +98,18 @@ void CinemachineSystem::update(float dt) {
 
         // 2. Resolve LookAt target
         bool needResolveLookAt = false;
-        if (vcam.lookAtTarget.getId() == Entity::INVALID_ENTITY || !registry.isValid(vcam.lookAtTarget)) {
+        if (vcam->lookAtTarget.getId() == Entity::INVALID_ENTITY || !registry.isValid(vcam->lookAtTarget)) {
             needResolveLookAt = true;
         } else {
-            auto* nameComp = registry.get<Name>(vcam.lookAtTarget);
-            if (!nameComp || nameComp->value != vcam.lookAtTargetName) {
+            auto* nameComp = registry.get<Name>(vcam->lookAtTarget);
+            if (!nameComp || nameComp->value != vcam->lookAtTargetName) {
                 needResolveLookAt = true;
             }
         }
-        if (needResolveLookAt && !vcam.lookAtTargetName.empty()) {
+        if (needResolveLookAt && !vcam->lookAtTargetName.empty()) {
             for (auto [ent, nameComp] : registry.view<Name>()) {
-                if (nameComp.value == vcam.lookAtTargetName) {
-                    vcam.lookAtTarget = ent;
+                if (nameComp.value == vcam->lookAtTargetName) {
+                    vcam->lookAtTarget = ent;
                     break;
                 }
             }
@@ -119,26 +122,29 @@ void CinemachineSystem::update(float dt) {
     }
 
     // 1. Find the highest priority active virtual camera
-    Entity activeVcamEntity = Entity();
+    Entity activeVcamEntity;
     int highestPriority = -999999;
-    CinemachineVirtualCamera* activeVcam = nullptr;
-    Transform* activeVcamTransform = nullptr;
 
-    for (auto [entity, vcam, transform] : registry.view<CinemachineVirtualCamera, Transform>()) {
+    for (auto [entity, vcam] : registry.view<CinemachineVirtualCamera>()) {
         if (vcam.active && vcam.priority > highestPriority) {
             highestPriority = vcam.priority;
             activeVcamEntity = entity;
-            activeVcam = &vcam;
-            activeVcamTransform = &transform;
         }
     }
 
-    if (!activeVcam) {
+    if (activeVcamEntity.getId() == Entity::INVALID_ENTITY) {
         return; // No virtual camera active
     }
 
-    // Configure player controller orient-to-movement behavior based on active camera mode
-    if (activeVcam->followTarget.getId() != Entity::INVALID_ENTITY && registry.isValid(activeVcam->followTarget)) {
+    CinemachineVirtualCamera* activeVcam = registry.get<CinemachineVirtualCamera>(activeVcamEntity);
+    Transform* activeVcamTransform = registry.get<Transform>(activeVcamEntity);
+
+    if (!activeVcam || !activeVcamTransform) {
+        return;
+    }
+
+    // Configure player controller orient-to-movement behavior based on active camera mode (during Play Mode only)
+    if (editorMode.isPlaying && activeVcam->followTarget.getId() != Entity::INVALID_ENTITY && registry.isValid(activeVcam->followTarget)) {
         if (auto* pc = registry.get<PlayerControllerComponent>(activeVcam->followTarget)) {
             if (activeVcam->mode == CinemachineMode::FirstPerson || (activeVcam->mode == CinemachineMode::ThirdPersonFollow && activeVcam->mouseOrbit)) {
                 pc->orientToMovement = false; // Strafe mode (player always faces camera yaw)
@@ -157,18 +163,47 @@ void CinemachineSystem::update(float dt) {
     glm::vec3 targetPos = activeVcamTransform->position;
     glm::vec3 targetRot = activeVcamTransform->rotation;
 
+    // One-time initialization on scene load or component creation
+    if (!activeVcam->initialized) {
+        if (activeVcam->cameraYaw == 0.0f && activeVcam->orbitYaw != 0.0f) {
+            activeVcam->cameraYaw = activeVcam->orbitYaw;
+        } else if (activeVcam->cameraYaw == 0.0f && activeVcam->mode == CinemachineMode::Follow2D) {
+            activeVcam->cameraYaw = -90.0f;
+            activeVcam->orbitYaw = -90.0f;
+        } else {
+            activeVcam->orbitYaw = activeVcam->cameraYaw;
+        }
+
+        activeVcamTransform->rotation.y = activeVcam->cameraYaw;
+        activeVcamTransform->rotation.x = activeVcam->cameraPitch;
+        activeVcam->lastTransformYaw = activeVcamTransform->rotation.y;
+        activeVcam->lastTransformPitch = activeVcamTransform->rotation.x;
+
+        activeVcam->currentPosition = targetPos;
+        activeVcam->currentRotationEuler = glm::vec3(activeVcam->cameraPitch, activeVcam->cameraYaw, activeVcamTransform->rotation.z);
+        activeVcam->initialized = true;
+    } else {
+        // Sync orbit angles to camera yaw/pitch if cameraYaw/cameraPitch were edited in Inspector
+        activeVcam->orbitYaw = activeVcam->cameraYaw;
+        activeVcam->orbitPitch = activeVcam->cameraPitch;
+    }
+
     if (activeVcam->mode == CinemachineMode::ThirdPersonFollow) {
         // Follow Target
         if (activeVcam->followTarget.getId() != Entity::INVALID_ENTITY && registry.isValid(activeVcam->followTarget)) {
             if (auto* targetTrans = registry.get<Transform>(activeVcam->followTarget)) {
                 glm::vec3 followBasePos = targetTrans->position;
 
-                // Handle mouse orbit
+                // Handle mouse orbit (in Play Mode only)
                 if (activeVcam->mouseOrbit) {
-                    if (auto* input = registry.get<InputComponent>(activeVcamEntity)) {
-                        activeVcam->orbitYaw   += input->look.x * activeVcam->orbitSensitivity;
-                        activeVcam->orbitPitch += input->look.y * activeVcam->orbitSensitivity;
-                        activeVcam->orbitPitch = std::clamp(activeVcam->orbitPitch, -80.0f, 80.0f);
+                    if (editorMode.isPlaying) {
+                        if (auto* input = registry.get<InputComponent>(activeVcamEntity)) {
+                            activeVcam->orbitYaw   += input->look.x * activeVcam->orbitSensitivity;
+                            activeVcam->orbitPitch += input->look.y * activeVcam->orbitSensitivity;
+                            activeVcam->orbitPitch = std::clamp(activeVcam->orbitPitch, -80.0f, 80.0f);
+                            activeVcam->cameraYaw = activeVcam->orbitYaw;
+                            activeVcam->cameraPitch = activeVcam->orbitPitch;
+                        }
                     }
 
                     glm::quat orbitRot = glm::quat(glm::vec3(glm::radians(activeVcam->orbitPitch), glm::radians(activeVcam->orbitYaw), 0.0f));
@@ -213,7 +248,7 @@ void CinemachineSystem::update(float dt) {
         }
 
         // Write back resolved camera target yaw rotation to target entity so player character aligns with camera look direction
-        if (activeVcam->mouseOrbit && activeVcam->followTarget.getId() != Entity::INVALID_ENTITY && registry.isValid(activeVcam->followTarget)) {
+        if (editorMode.isPlaying && activeVcam->mouseOrbit && activeVcam->followTarget.getId() != Entity::INVALID_ENTITY && registry.isValid(activeVcam->followTarget)) {
             if (auto* targetTrans = registry.get<Transform>(activeVcam->followTarget)) {
                 targetTrans->rotation.y = -targetRot.y + 90.0f;
             }
@@ -231,15 +266,21 @@ void CinemachineSystem::update(float dt) {
                 }
 
                 if (activeVcam->mouseLook) {
-                    if (auto* input = registry.get<InputComponent>(activeVcamEntity)) {
-                        activeVcam->cameraYaw   += input->look.x * activeVcam->orbitSensitivity;
-                        activeVcam->cameraPitch += input->look.y * activeVcam->orbitSensitivity;
-                        activeVcam->cameraPitch = std::clamp(activeVcam->cameraPitch, -89.0f, 89.0f);
+                    if (editorMode.isPlaying) {
+                        if (auto* input = registry.get<InputComponent>(activeVcamEntity)) {
+                            activeVcam->cameraYaw   += input->look.x * activeVcam->orbitSensitivity;
+                            activeVcam->cameraPitch += input->look.y * activeVcam->orbitSensitivity;
+                            activeVcam->cameraPitch = std::clamp(activeVcam->cameraPitch, -89.0f, 89.0f);
+                            activeVcam->orbitYaw = activeVcam->cameraYaw;
+                            activeVcam->orbitPitch = activeVcam->cameraPitch;
+                        }
                     }
                     targetRot = glm::vec3(activeVcam->cameraPitch, activeVcam->cameraYaw, 0.0f);
                     
                     // Write back yaw rotation to target entity so player character aligns with camera look direction
-                    targetTrans->rotation.y = -activeVcam->cameraYaw + 90.0f;
+                    if (editorMode.isPlaying) {
+                        targetTrans->rotation.y = -activeVcam->cameraYaw + 90.0f;
+                    }
                 } else {
                     targetRot = targetTrans->rotation;
                 }
@@ -273,30 +314,23 @@ void CinemachineSystem::update(float dt) {
                 }
             }
         }
-    }
-
-    // Initialize currentPosition if not done yet
-    if (!activeVcam->initialized) {
-        activeVcam->currentPosition = targetPos;
-        activeVcam->currentRotationEuler = targetRot;
-
-        // Initialize orbit/mouse look angles from target's rotation to prevent snapping
+    } else if (activeVcam->mode == CinemachineMode::Follow2D) {
+        // 2D Follow Mode
         if (activeVcam->followTarget.getId() != Entity::INVALID_ENTITY && registry.isValid(activeVcam->followTarget)) {
             if (auto* targetTrans = registry.get<Transform>(activeVcam->followTarget)) {
-                activeVcam->orbitYaw = targetTrans->rotation.y;
-                activeVcam->orbitPitch = targetTrans->rotation.x;
-                activeVcam->cameraYaw = targetTrans->rotation.y;
-                activeVcam->cameraPitch = targetTrans->rotation.x;
+                targetPos.x = targetTrans->position.x + activeVcam->followOffset.x;
+                targetPos.y = targetTrans->position.y + activeVcam->followOffset.y;
+                float defaultZ = (activeVcam->followOffset.z != 0.0f) ? activeVcam->followOffset.z : 10.0f;
+                targetPos.z = targetTrans->position.z + defaultZ;
             }
         }
-
-        activeVcam->initialized = true;
+        targetRot = glm::vec3(activeVcam->cameraPitch, activeVcam->cameraYaw, activeVcamTransform->rotation.z);
     }
 
-    // Apply Damping to position
-    float followDampingVal = activeVcam->followDamping;
+    // Apply Damping to position (disable damping in Editor mode so slider changes respond instantly)
+    float followDampingVal = editorMode.isPlaying ? activeVcam->followDamping : 0.0f;
     if (activeVcam->mode == CinemachineMode::FixedLookAt) {
-        followDampingVal = 0.0f; // Position is fixed
+        followDampingVal = 0.0f;
     }
 
     if (followDampingVal > 0.0f) {
@@ -307,9 +341,9 @@ void CinemachineSystem::update(float dt) {
     }
 
     // Apply Damping to rotation
-    float lookAtDampingVal = activeVcam->lookAtDamping;
-    if (activeVcam->mode == CinemachineMode::FirstPerson) {
-        lookAtDampingVal = 0.0f; // Instant rotation for FPS
+    float lookAtDampingVal = editorMode.isPlaying ? activeVcam->lookAtDamping : 0.0f;
+    if (activeVcam->mode == CinemachineMode::FirstPerson || activeVcam->mode == CinemachineMode::Follow2D) {
+        lookAtDampingVal = 0.0f;
     }
 
     if (lookAtDampingVal > 0.0f) {
@@ -338,6 +372,8 @@ void CinemachineSystem::update(float dt) {
     // Write back resolved values to the virtual camera's transform component so it can be inspected
     activeVcamTransform->position = activeVcam->currentPosition;
     activeVcamTransform->rotation = activeVcam->currentRotationEuler;
+    activeVcam->lastTransformYaw = activeVcamTransform->rotation.y;
+    activeVcam->lastTransformPitch = activeVcamTransform->rotation.x;
 
     // 3. Handle Cinemachine Brain Blending transitions
     if (activeVcamEntity != lastActiveCameraEntity) {
@@ -391,11 +427,25 @@ void CinemachineSystem::update(float dt) {
     }
 
     // 4. Update the main scene camera (first active non-editor camera in registry)
-    for (auto [entity, cam, transform] : registry.view<Camera, Transform>()) {
+    for (auto [entity, camDummy] : registry.view<Camera>()) {
         if (!registry.has<EditorCamera>(entity)) {
-            transform.position = finalPos;
-            transform.rotation = finalRot;
-            cam.fov = activeVcam->fov;
+            auto* transform = registry.get<Transform>(entity);
+            auto* cam = registry.get<Camera>(entity);
+            if (transform && cam) {
+                transform->position = finalPos;
+                transform->rotation = finalRot;
+                cam->fov = activeVcam->fov;
+
+                int width = 0, height = 0;
+                glfwGetWindowSize(renderer.getWindow(), &width, &height);
+                if (height > 0) cam->aspect = static_cast<float>(width) / static_cast<float>(height);
+
+                if (editorMode.isPlaying) {
+                    glm::mat4 vp = cam->projection() * cam->view(*transform);
+                    renderer.setActiveCamera(cam->projection(), transform->position, cam->view(*transform));
+                    renderer.setGameplayCamera(vp, transform->position);
+                }
+            }
             break; // Only update one main camera
         }
     }

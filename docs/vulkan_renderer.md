@@ -1,104 +1,126 @@
 # Vulkan Rendering Engine
 
-This document details the graphics architecture of the Vulkan Renderer. The renderer is designed to abstract raw Vulkan API complexity into clean, RAII C++ wrapper classes while preserving performance, supporting instanced drawing, and utilizing modern techniques like Push Constants.
+This document details the graphics architecture of the Vulkan Renderer. The renderer is designed to abstract raw Vulkan API complexity into clean, RAII C++ wrapper classes while preserving maximum performance, supporting instanced drawing, Cascaded Shadow Maps (CSM), compute shader passes, Screen-Space Ambient Occlusion (SSAO), a modular post-processing pipeline, and robust frame lifecycle synchronization.
 
 ![Vulkan Layer](diagrams/out/vulkan_layer/VulkanLayer.png)
 
 ---
 
-## Vulkan Abstraction Layer
+## 1. Vulkan Abstraction Layer
 
 Vulkan requires explicit declaration of resources, layouts, synchronization, and hardware access. The engine implements a set of object-oriented C++ classes under `engine/src/core/` to safely encapsulate Vulkan handles:
 
 *   **[VulkanContext](../engine/src/core/VulkanContext.hpp)**: Stores instance-wide structures, validation layer callbacks, and physical device enumerations.
-*   **[VulkanDevice](../engine/src/core/VulkanDevice.hpp)**: Handles hardware physical devices selection (prioritizing discrete GPUs) and logical device creation. Configures queue families for graphics, presentation, and transfers.
-*   **[VulkanSwapchain](../engine/src/core/VulkanSwapChain.hpp)**: Manages screen resolution changes, double/triple buffering image chains, render pass configurations, swapchain image views, and framebuffers.
+*   **[VulkanDevice](../engine/src/core/VulkanDevice.hpp)**: Handles hardware physical device selection (prioritizing discrete GPUs) and logical device creation. Configures queue families for graphics, presentation, compute, and transfers.
+*   **[VulkanSwapchain](../engine/src/core/VulkanSwapChain.hpp)**: Manages screen resolution changes, double-buffering image chains, render pass configurations, swapchain image views, and framebuffers.
 *   **[VulkanPipeline](../engine/src/core/VulkanPipeline.hpp)**: Coordinates shader layout state bindings, viewport/scissor setup, depth/stencil tests, color blending, rasterization, and multi-sampling configurations.
 *   **[VulkanBuffer](../engine/src/core/VulkanBuffer.hpp)**: Encapsulates `VkBuffer` allocation and `VkDeviceMemory` binding. Supports staging allocations, GPU-local transfer operations, and persistent host mapping.
-*   **[VulkanDescriptors](../engine/src/core/VulkanDescriptors.hpp)**: Standardizes descriptor layouts, bindings, pools, and set allocations for camera matrices and global uniforms.
-*   **[VulkanCommandManager](../engine/src/core/VulkanCommandManager.hpp)**: Creates command pools and records frame buffer command sequences. Supports one-time command buffer execution for staging buffers uploads.
+*   **[VulkanDescriptors](../engine/src/core/VulkanDescriptors.hpp)**: Standardizes descriptor layouts, bindings, pools, and set allocations for camera matrices, compute LUTs, and global uniforms.
+*   **[VulkanCommandManager](../engine/src/core/VulkanCommandManager.hpp)**: Creates command pools and records frame buffer command sequences. Supports one-time command buffer execution for staging buffer uploads.
 *   **[VulkanFrameSync](../engine/src/core/VulkanFrameSync.hpp)**: Holds CPU-GPU synchronization elements, preventing race conditions via fences and swapchain image-acquisition semaphores.
 
 ---
 
-## Double-Buffered Frame Synchronization
+## 2. Frame Lifecycle State Machine & Synchronization
 
-To prevent the CPU from submitting draw commands faster than the GPU can process them (which would lead to visual artifacts or memory exhaust), the engine coordinates double-buffering using [VulkanFrameSync.hpp](../engine/src/core/VulkanFrameSync.hpp):
+In production environments, OS events such as window minimizing (0x0 extent), drag-resizing, display adapter unplugging, or full-screen toggling can trigger swapchain invalidation (`VK_ERROR_OUT_OF_DATE_KHR` or `VK_SUBOPTIMAL_KHR`). Submitting draw commands to an invalid or un-acquired swapchain causes Vulkan driver crashes and device loss (`VK_ERROR_DEVICE_LOST`).
 
-```cpp
-struct VulkanFrameSync {
-    std::vector<VkSemaphore> imageAvailableSemaphores; // GPU-GPU: image is ready for rendering
-    std::vector<VkSemaphore> renderFinishedSemaphores; // GPU-GPU: rendering completed, ready to present
-    std::vector<VkFence>     inFlightFences;           // CPU-GPU: CPU waits for frame to finish on GPU
-};
+The engine enforces a rigorous frame state machine in [VulkanRenderer.cpp](../engine/src/VulkanRenderer.cpp):
+
+```mermaid
+stateDiagram-v2
+    [*] --> Idle
+    Idle --> Minimized: Window extent is 0x0
+    Minimized --> Idle: Window restored
+    Idle --> Acquired: beginFrame() -> vkAcquireNextImageKHR OK
+    Idle --> OutOfDate: vkAcquireNextImageKHR -> OUT_OF_DATE / SUBOPTIMAL
+    OutOfDate --> Idle: recreateSwapChain() + Dispatch Callbacks
+    Acquired --> Recording: Record Shadow, Forward, Post-Process, UI
+    Recording --> Submitted: endFrame() -> vkQueueSubmit
+    Submitted --> Presented: vkQueuePresentKHR
+    Presented --> Idle
 ```
 
-### The Render Loop Sync Protocol
-1.  **Wait for Frame Fence**: Before starting a new frame, the CPU waits on the `inFlightFence` of the current frame index (`vkWaitForFences`). This guarantees the GPU is finished executing the command buffer we're about to record into.
-2.  **Acquire Next Image**: Request the next image from the swapchain using `vkAcquireNextImageKHR`, passing the `imageAvailableSemaphore`.
-3.  **Reset Fence**: Reset the fence (`vkResetFences`) to lock the current frame buffer slot.
-4.  **Submit Command Buffer**: Submit the recorded commands to the graphics queue (`vkQueueSubmit`).
-    *   **Wait Stage**: Configured to wait on the `imageAvailableSemaphore` at the `VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT` stage.
-    *   **Signal Stage**: Signals the `renderFinishedSemaphore` when drawing is completed.
-    *   **Fence Trigger**: Passes the `inFlightFence` to automatically trigger when the GPU has finished execution.
-5.  **Present Image**: Request presentation (`vkQueuePresentKHR`), waiting on the `renderFinishedSemaphore` to ensure rendering has finished.
+### Lifecycle Guarantees (`beginFrame` & `endFrame`)
 
-### Trade-Off: Double vs Triple Buffering
-* **Double Buffering (Engine Choice)**: Limits active frames in flight to 2. This keeps input latency low (the time between user input and screen update is at most 2 frames) and reduces VRAM allocation for swapchain buffers.
-* **Triple Buffering**: Allows a 3rd frame to start processing on the CPU while the GPU draws the 2nd and displays the 1st. While this hides framerate micro-stutters, it introduces an extra frame of input lag and requires additional buffer allocation memory pools.
-
----
-
-## Resource Lifetimes & RAII Destruction Sequence
-
-Vulkan has strict rules regarding object lifetimes: objects cannot be destroyed while the GPU is still executing commands that reference them. Additionally, Vulkan handles must be destroyed in the **reverse order of their creation**.
-
-Our RAII wrappers coordinates resource disposal via an explicit cleanup sequence inside [VulkanRenderer::cleanup()](../engine/src/VulkanRenderer.cpp):
-
-1. **GPU Wait**: Wait for the GPU to complete all running queue operations using `vkDeviceWaitIdle(device)`.
-2. **Editor UI Disposal**: Call `ImGui_ImplVulkan_Shutdown()` and `ImGui_ImplGlfw_Shutdown()` to clean up GUI font allocations and render states.
-3. **Pipeline Cleanup**: Destroy pipelines (`VkPipeline`) and layouts (`VkPipelineLayout`).
-4. **Descriptor Sets**: Clear pools (`VkDescriptorPool`) and set layouts (`VkDescriptorSetLayout`).
-5. **Framebuffers & RenderPass**: Destroy framebuffers and the main render pass.
-6. **Swapchain**: Destroy the swapchain (`VkSwapchainKHR`) and its image views.
-7. **Buffer Deallocation**: Free vertex, index, and instancing dynamic buffers (`vkDestroyBuffer` and `vkFreeMemory`).
-8. **Sync Primitives**: Destroy fences and semaphores (`vkDestroyFence`, `vkDestroySemaphore`).
-9. **Logical Device & Instance**: Destroy the logical `VkDevice` handle, and finally the `VkInstance` instance.
-
+1. **Minimized Window Protection**:
+   ```cpp
+   int width = 0, height = 0;
+   glfwGetFramebufferSize(context->getWindow(), &width, &height);
+   if (width == 0 || height == 0) {
+       return false; // Skip drawing, do not record or submit invalid frames
+   }
+   ```
+2. **Atomic Frame Activity Guard (`m_frameActive`)**:
+   `beginFrame()` returns a `bool`. If image acquisition fails or the window is minimized, `m_frameActive` remains `false`. `endFrame()` verifies this flag and safely aborts if no frame was actively begun.
+3. **Double-Buffered CPU-GPU Synchronization**:
+   ```cpp
+   vkWaitForFences(device->getLogicalDevice(), 1, &sync->inFlightFences[currentFrame], VK_TRUE, UINT64_MAX);
+   // Image acquisition with imageAvailableSemaphore
+   // Only reset fence AFTER successful acquisition
+   vkResetFences(device->getLogicalDevice(), 1, &sync->inFlightFences[currentFrame]);
+   ```
+4. **Swapchain Recreation Event Dispatch**:
+   Subsystems that maintain resolution-dependent framebuffers (e.g., Post-Process Pipeline, SSAO, Scene Viewport, UI cameras) register recreation listeners:
+   ```cpp
+   renderer.addSwapchainRecreatedCallback([](uint32_t width, uint32_t height) {
+       // Resize HDR offscreen render targets and camera aspect ratios
+   });
+   ```
 
 ---
 
-## Shader & Graphics Pipeline Compilation
+## 3. Multipass Rendering Architecture
 
-Shaders are written in GLSL and compiled to binary SPIR-V bytecode. The build process uses the `glslc` compiler to build:
-*   `unlit.vert` / `unlit.frag` -> `unlit.vert.spv` / `unlit.frag.spv` (handles textured and colored mesh drawing)
-*   `grid.vert` / `grid.frag` -> `grid.vert.spv` / `grid.frag.spv` (handles infinite grid rendering)
+The frame rendering pipeline coordinates multiple distinct rendering stages:
 
-The [PipelineBuilder](../engine/src/core/PipelineBuilder.hpp) dynamically builds the graphics pipelines. It links vertex input layouts, rasterization configurations (cull modes, polygon drawing modes), color blending, and shader modules into a single `VkPipeline` state.
+```mermaid
+graph TD
+    Shadow["1. Cascaded Shadow Map Pass (Directional Sun CSM)"] --> Depth["2. Depth Pre-Pass / G-Buffer"]
+    Depth --> SSAO["3. SSAO Generation & Bilateral Depth Blur"]
+    SSAO --> Forward["4. Forward Opaque & Transparent Shading"]
+    Compute["Compute Passes (Atmosphere / Cloud LUTs)"] --> Forward
+    Forward --> Sky["5. Celestial & Atmosphere Blending"]
+    Sky --> Post["6. Post-Process Stack (Tonemapping, Retro Scale)"]
+    Post --> UI["7. ImGui Editor Overlay & Viewport Blit"]
+    UI --> Present["8. Swapchain Presentation"]
+```
 
-### Depth Buffering & Depth Clears
-To ensure objects render correctly in 3D depth order:
-1. **Swapchain Depth Buffer**: The `VulkanSwapchain` queries the GPU to find a supported depth format (e.g., `VK_FORMAT_D32_SFLOAT`). It allocates a GPU-local `VkImage`, assigns a `VkDeviceMemory` allocation, and creates a `VkImageView`.
-2. **RenderPass Attachment**: The main rendering pass is configured with **2 attachments**: Color (index 0) and Depth/Stencil (index 1). The subpass is configured to perform depth write and read tests.
-3. **Pipeline Depth Test**: The pipeline assembly enables `VkPipelineDepthStencilStateCreateInfo` with `depthTestEnable = VK_TRUE` and `depthWriteEnable = VK_TRUE`.
-4. **Depth Clears**: During `RenderSystem::drawFrame`, the command recorder specifies **2 clear values**: color clear value (e.g. dark grey) and depth clear value (`1.0f` representing maximum distance depth).
+### 1. Cascaded Shadow Mapping (CSM)
+* **Frustum Splitting**: Slices camera frustum into up to 4 cascades using a practical logarithmic/uniform split lambda ($\lambda = 0.85$).
+* **Filtering**: 16-tap Poisson disk filtering or 3x3 PCF eliminates harsh shadow stair-stepping.
+* **Biasing**: Normal-offset geometric bias prevents shadow acne and detached shadows.
 
-### Descriptor Set Layouts (Camera & Textures)
-The engine binds graphics pipeline properties using **two separate descriptor sets**:
-* **Descriptor Set 0 (Global Uniforms)**: Binds the global Camera Uniform Buffer (containing View and Projection matrices) to binding 0. Bound once per frame.
-* **Descriptor Set 1 (Material Textures)**: Binds the texture's `VkImageView` and `VkSampler` to binding 0. Bound per material batch. A fallback 1x1 white texture descriptor is bound automatically if the entity's material doesn't specify a texture path.
+### 2. Screen-Space Ambient Occlusion (SSAO)
+* Generates realistic contact shadows by sampling hemispherical normal-aligned kernels against the depth buffer.
+* Bilateral depth-aware blur eliminates kernel noise without blurring across object boundaries.
+
+### 3. Compute Shader Infrastructure
+* The engine natively supports compute pipelines (`VK_PIPELINE_BIND_POINT_COMPUTE`).
+* Powers real-time atmospheric scattering LUTs (Transmittance, Multi-Scattering, SkyView, 3D Aerial Perspective, and 3D Cloud Noise).
+
+### 4. Post-Processing Pipeline (`PostProcessPipeline`)
+* Chain of fullscreen fragment passes operating on HDR offscreen color buffers.
+* Supports photographic tonemapping (ACES, AgX, Filmic, Reinhard), custom fullscreen effects, and retro downsampling with nearest-neighbor upscaling.
 
 ---
 
-## Instanced Drawing & Push Constants
+## 4. Runtime Shader Compiler (`ShaderCompiler`)
 
-For maximum performance, the renderer avoids calling `vkCmdDraw` for every individual entity. Instead, it groups draw calls by **Mesh + Material combination** inside [RenderSystem.hpp](../engine/include/ecs/systems/RenderSystem.hpp).
+Shaders are written in GLSL and compiled to SPIR-V. The engine features an integrated runtime compiler ([`ShaderCompiler.hpp`](../engine/include/renderer/ShaderCompiler.hpp)):
+* **glslc Integration**: Automatically locates the compiler via `VULKAN_SDK` or `PATH`.
+* **Smart Timestamp Caching**: Compares modification timestamps of `.vert`, `.frag`, and `.comp` files against output `.spv` files. Unchanged shaders are loaded instantly from disk.
+* **Live Hot Reloading**: Shaders can be edited and recompiled while the engine is running, logging compiler warnings and errors directly to the editor console.
+
+---
+
+## 5. Instanced Drawing & Push Constants
+
+For optimal draw call throughput, the renderer groups entities by **Mesh + Material combination**:
 
 ### Per-Instance Data via Push Constants
+Instead of allocating costly dynamic uniform buffers, the engine passes model matrices and tint colors directly through high-speed GPU push constant registers:
 
-Rather than storing model matrices in costly dynamic uniform buffers, the engine utilizes **Push Constants**. Push Constants reside in high-speed registers on the GPU, allowing instant access with zero memory overhead.
-
-The push constant structure is defined as:
 ```cpp
 struct PushConstants {
     glm::mat4 model;  // Entity transformation matrix
@@ -106,23 +128,12 @@ struct PushConstants {
 };
 ```
 
-### The Batch Drawing Loop
-1.  **Group Entities**: The `RenderSystem` aggregates active entities into batches of identical `Mesh*` and `Material*` keys.
-2.  **Bind Pipeline & Descriptors**: Binds the material's pipeline and descriptor sets (which contain camera projection-view uniform buffer data).
-3.  **Bind Vertex/Index Buffers**: Binds the mesh vertex buffer (VBO) and index buffer (IBO) once.
-4.  **Draw Instances**: Iterates through the batch. For each instance:
-    *   Fills the `PushConstants` struct with the instance's model matrix and color.
-    *   Pushes data using `vkCmdPushConstants`.
-    *   Calls `vkCmdDrawIndexed` with an instance count of 1.
-
-By using push constants and batching vertex/index buffer bindings, the engine reduces CPU driver overhead and minimizes state changes.
-
 ---
 
-## Infinite Grid Rendering
+## 6. Rendering Performance Metrics (`RenderMetrics`)
 
-The engine implements a beautiful infinite grid component. It is drawn dynamically inside `drawGrids()` without requiring a complex vertex buffer:
-1.  Binds the grid pipeline.
-2.  Passes grid parameters (camera position, grid color, spacing, fade size) via a specialized grid push constant block.
-3.  Calls `vkCmdDraw(cmd, 6, 1, 0, 0)` with 6 vertices.
-4.  The `grid.vert` shader generates a screen-aligned quad on the fly. The `grid.frag` shader calculates grid lines in world space and applies a fading effect based on distance from the camera position, creating a smooth grid backdrop.
+The renderer gathers per-frame metrics accessible via `renderer.getMetrics()`:
+* **Draw Calls**: Number of `vkCmdDraw` and `vkCmdDrawIndexed` submissions in the current frame.
+* **Triangle Count**: Total primitive count rasterized.
+* **Vertex Count**: Total vertices processed.
+* **Frame Index**: Monotonically increasing frame identifier for temporal effects and jittering.

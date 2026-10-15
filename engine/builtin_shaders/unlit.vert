@@ -13,11 +13,28 @@ layout(push_constant) uniform Push {
     float fade;
 } push;
 
+struct GPULight {
+    vec4 position;
+    vec4 direction;
+    vec4 color;
+    vec4 shadowInfo;
+};
+
+const int MAX_LIGHTS = 16;
+const int MAX_SHADOW_CASCADES = 4;
+const int MAX_SPOT_SHADOWS = 4;
+
 layout(set = 0, binding = 0) uniform CameraUBO {
     mat4 viewProj;
-    vec4 camPos;      // camPos.xyz, w unused
-    vec4 lightDir;    // Direction in xyz, type in w
-    vec4 lightColor;  // Color in xyz, intensity in w
+    mat4 cascadeLightSpaceMatrices[MAX_SHADOW_CASCADES];
+    mat4 spotLightSpaceMatrices[MAX_SPOT_SHADOWS];
+    vec4 cascadeSplits;
+    vec4 camPos;
+    vec4 ambientLight;
+    vec4 shadowParams;
+    vec4 lightParams;
+    vec4 weatherParams;
+    GPULight lights[MAX_LIGHTS];
 } cam;
 
 layout(location = 0) out vec4 vColor;

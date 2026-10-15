@@ -1,6 +1,7 @@
 #pragma once
 #include <vulkan/vulkan.h>
 #include <vector>
+#include <array>
 #include <stdexcept>
 
 /**
@@ -50,13 +51,31 @@ public:
      */
     void createJointsDescriptorSetLayout();
 
-    // Allocate and update descriptor sets for a uniform buffer
     /**
-     * @brief Allocates and binds descriptor sets for the camera UBO.
+     * @brief Creates descriptor set layout for terrain 4-layer splatting (1 splatmap + 4 albedos + 4 normals + 1 UBO).
+     */
+    void createTerrainDescriptorSetLayout();
+
+    /**
+     * @brief Allocates and binds descriptor sets for the camera UBO and directional shadow map.
      * @param uniformBuffer The GPU buffer containing camera matrices.
      * @param bufferSize Size of UBO buffer.
+     * @param shadowView Directional shadow map image view.
+     * @param shadowSampler Directional shadow depth comparison sampler.
      */
-    void allocateCameraDescriptorSets(VkBuffer uniformBuffer, VkDeviceSize bufferSize);
+    void allocateCameraDescriptorSets(
+        VkBuffer uniformBuffer, VkDeviceSize bufferSize,
+        VkImageView shadowView, VkSampler shadowSampler,
+        VkImageView pointShadowView = VK_NULL_HANDLE
+    );
+
+    /**
+     * @brief Updates the shadow map samplers in the camera descriptor set.
+     */
+    void updateShadowDescriptor(
+        VkImageView shadowView, VkSampler shadowSampler,
+        VkImageView pointShadowView = VK_NULL_HANDLE
+    );
 
     /**
      * @brief Allocates and binds descriptor set for texture samplers (diffuse, normal, metallic).
@@ -109,6 +128,28 @@ public:
      */
     void allocateJointsDescriptorSet(VkDescriptorSet& descriptorSet, VkBuffer uniformBuffer, VkDeviceSize range);
 
+    /**
+     * @brief Allocates and binds descriptor set for terrain 4-layer splatting.
+     */
+    void allocateTerrainDescriptorSet(
+        VkDescriptorSet& descriptorSet,
+        VkImageView splatView, VkSampler splatSampler,
+        const std::array<VkImageView, 4>& albedoViews, const std::array<VkSampler, 4>& albedoSamplers,
+        const std::array<VkImageView, 4>& normalViews, const std::array<VkSampler, 4>& normalSamplers,
+        VkBuffer uboBuffer, VkDeviceSize uboSize
+    );
+
+    /**
+     * @brief Updates an existing terrain descriptor set.
+     */
+    void updateTerrainDescriptorSet(
+        VkDescriptorSet descriptorSet,
+        VkImageView splatView, VkSampler splatSampler,
+        const std::array<VkImageView, 4>& albedoViews, const std::array<VkSampler, 4>& albedoSamplers,
+        const std::array<VkImageView, 4>& normalViews, const std::array<VkSampler, 4>& normalSamplers,
+        VkBuffer uboBuffer, VkDeviceSize uboSize
+    );
+
     // Cleanup
     /**
      * @brief Safely destroys layout bindings and descriptor pools.
@@ -137,6 +178,11 @@ public:
      */
     VkDescriptorSetLayout getJointsDescriptorSetLayout() const { return jointsDescriptorSetLayout; }
     /**
+     * @brief Gets raw terrain descriptor set layout.
+     * @return VkDescriptorSetLayout handle.
+     */
+    VkDescriptorSetLayout getTerrainDescriptorSetLayout() const { return terrainDescriptorSetLayout; }
+    /**
      * @brief Gets raw camera descriptor set.
      * @return VkDescriptorSet handle.
      */
@@ -161,6 +207,8 @@ private:
     VkDescriptorSetLayout singleTextureDescriptorSetLayout = VK_NULL_HANDLE;
     /** @brief Descriptor set layout allocated for joints. */
     VkDescriptorSetLayout jointsDescriptorSetLayout = VK_NULL_HANDLE;
+    /** @brief Descriptor set layout allocated for terrain splatting. */
+    VkDescriptorSetLayout terrainDescriptorSetLayout = VK_NULL_HANDLE;
     /** @brief Descriptor set allocated for camera. */
     VkDescriptorSet cameraDescriptorSet = VK_NULL_HANDLE;
 };

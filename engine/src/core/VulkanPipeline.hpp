@@ -39,7 +39,10 @@ public:
         VkRenderPass renderPass,
         const std::string& vertPath,
         const std::string& fragPath,
-        const std::vector<VkDescriptorSetLayout>& descriptorSetLayouts = {});
+        const std::vector<VkDescriptorSetLayout>& descriptorSetLayouts = {},
+        const std::vector<VkVertexInputBindingDescription>& customBindings = {},
+        const std::vector<VkVertexInputAttributeDescription>& customAttributes = {},
+        VkCullModeFlags cullMode = VK_CULL_MODE_NONE);
 
     /**
      * @brief Safely destroys graphics pipeline and layouts.

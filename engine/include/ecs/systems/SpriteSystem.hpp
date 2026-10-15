@@ -24,6 +24,7 @@ namespace Engine {
      */
     class ENGINE_API SpriteSystem : public System {
     public:
+        const char* getName() const override { return "SpriteSystem"; }
         /**
          * @brief Construct a new Sprite System.
          * @param reg   Reference to the active ECS Registry.

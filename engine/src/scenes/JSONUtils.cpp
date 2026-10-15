@@ -133,6 +133,41 @@ namespace JSONUtils {
     }
 
     /**
+     * @brief Extract boolean value corresponding to target key.
+     * @param source Raw JSON source.
+     * @param key Target JSON property key.
+     * @param value Destination variable reference.
+     * @return True if successful, false otherwise.
+     */
+    bool extractBoolValue(const std::string& source, const std::string& key, bool& value) {
+        const std::string token = "\"" + key + "\"";
+        size_t keyPos = source.find(token);
+        if (keyPos == std::string::npos) {
+            return false;
+        }
+
+        size_t colonPos = source.find(':', keyPos);
+        if (colonPos == std::string::npos) {
+            return false;
+        }
+
+        size_t truePos = source.find("true", colonPos);
+        size_t falsePos = source.find("false", colonPos);
+        size_t commaPos = source.find(',', colonPos);
+        size_t bracePos = source.find('}', colonPos);
+        size_t endPos = std::min(commaPos, bracePos);
+
+        if (truePos != std::string::npos && (endPos == std::string::npos || truePos < endPos)) {
+            value = true;
+            return true;
+        } else if (falsePos != std::string::npos && (endPos == std::string::npos || falsePos < endPos)) {
+            value = false;
+            return true;
+        }
+        return false;
+    }
+
+    /**
      * @brief Extracts individual entity JSON objects.
      * @param source Raw JSON source.
      * @return Vector of entity JSON strings.

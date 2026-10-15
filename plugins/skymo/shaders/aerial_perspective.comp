@@ -1,0 +1,169 @@
+#version 450
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform sampler2D inTransmittanceLUT; // Unused or legacy
+layout(set = 0, binding = 1) uniform sampler2D inMultiScatterLUT;   // Unused or legacy
+layout(set = 0, binding = 2) uniform sampler2D inReserved;         // Unused
+layout(set = 0, binding = 3, rgba16f) uniform writeonly image3D outCameraVolumeLUT;
+layout(set = 0, binding = 4) uniform sampler2DArrayShadow shadowMap;
+
+layout(std140, set = 0, binding = 5) uniform ShadowUBO {
+    mat4 cascadeLightSpaceMatrices[4];
+    vec4 cascadeSplits; // View-space split depths: x, y, z, w
+    vec4 shadowParams;   // x: bias, y: normalBias, z: resolution, w: enabled (1.0 or 0.0)
+} u_Shadow;
+
+layout(push_constant) uniform AerialPushConstants {
+    mat4 invViewProj;
+    vec4 cameraPos;     // xyz: camPos, w: maxDistance
+    vec4 sunDirection;  // xyz: sunDir, w: sunIntensity
+    vec4 fogParams;     // x: densityMultiplier, y: anisotropy, z: startDistance, w: mode
+    vec4 fogColorTint;  // rgb: color tint, w: affectSky
+    vec4 heightParams;  // x: baseHeight, y: heightFalloff, z: shadowIntensity, w: marchSteps
+} pc;
+
+const float PI = 3.14159265358979323846;
+
+// Evaluates volumetric shadow attenuation using 4-cascade directional shadow map
+float sampleVolumetricShadow(vec3 worldPos, vec3 camForward) {
+    if (u_Shadow.shadowParams.w < 0.5) {
+        return 1.0;
+    }
+
+    // View-space linear depth along camera forward axis (aligns exactly with lit.frag view-space depth)
+    float viewDepth = dot(worldPos - pc.cameraPos.xyz, camForward);
+    if (viewDepth < 0.0 || viewDepth >= u_Shadow.cascadeSplits[3]) {
+        return 1.0;
+    }
+
+    int cascadeIdx = 0;
+    for (int i = 0; i < 3; ++i) {
+        if (viewDepth > u_Shadow.cascadeSplits[i]) {
+            cascadeIdx = i + 1;
+        }
+    }
+
+    vec4 lightSpacePos = u_Shadow.cascadeLightSpaceMatrices[cascadeIdx] * vec4(worldPos, 1.0);
+    vec3 projCoords = lightSpacePos.xyz / lightSpacePos.w;
+
+    if (projCoords.z > 1.0 || projCoords.z < 0.0 ||
+        projCoords.x < 0.0 || projCoords.x > 1.0 ||
+        projCoords.y < 0.0 || projCoords.y > 1.0) {
+        return 1.0;
+    }
+
+    float depthBias = max(u_Shadow.shadowParams.x * 1.5, 0.0005);
+    return texture(shadowMap, vec4(projCoords.xy, float(cascadeIdx), projCoords.z - depthBias));
+}
+
+float rayleighPhase(float cosTheta) {
+    return 3.0 / (16.0 * PI) * (1.0 + cosTheta * cosTheta);
+}
+
+float hgPhase(float g, float cosTheta) {
+    float g2 = g * g;
+    float denom = pow(max(0.0001, 1.0 + g2 - 2.0 * g * cosTheta), 1.5);
+    float phase = (1.0 / (4.0 * PI)) * ((1.0 - g2) / denom);
+    // Soft clamp forward scattering peak to prevent blinding camera when facing the sun/moon
+    return min(phase, 0.75);
+}
+
+void main() {
+    ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
+    ivec3 size = imageSize(outCameraVolumeLUT);
+    if (coord.x >= size.x || coord.y >= size.y) return;
+
+    vec2 uv = (vec2(coord) + 0.5) / vec2(size.xy);
+
+    float densityMul = max(0.0, pc.fogParams.x);
+    if (densityMul <= 0.00001) {
+        for (int z = 0; z < size.z; ++z) {
+            imageStore(outCameraVolumeLUT, ivec3(coord, z), vec4(0.0, 0.0, 0.0, 1.0));
+        }
+        return;
+    }
+
+    // 1. Reconstruct world-space ray direction for this screen column
+    vec4 ndcFar = vec4(uv.x * 2.0 - 1.0, uv.y * 2.0 - 1.0, 1.0, 1.0);
+    vec4 worldFar = pc.invViewProj * ndcFar;
+    vec3 rayDir = normalize(worldFar.xyz / worldFar.w - pc.cameraPos.xyz);
+
+    // Reconstruct camera forward vector in world space
+    vec4 ndcCenter = vec4(0.0, 0.0, 1.0, 1.0);
+    vec4 worldCenter = pc.invViewProj * ndcCenter;
+    vec3 camForward = normalize(worldCenter.xyz / worldCenter.w - pc.cameraPos.xyz);
+
+    float nearDist = max(0.1, pc.fogParams.z);
+    float farDist = max(nearDist + 5.0, pc.cameraPos.w);
+    float anisotropy = (pc.fogParams.y > -0.99 && pc.fogParams.y < 0.99) ? pc.fogParams.y : 0.8;
+    vec3 colorTint = pc.fogColorTint.rgb;
+    int mode = int(pc.fogParams.w + 0.5);
+
+    float baseHeight = pc.heightParams.x;
+    float heightFalloff = max(0.0001, pc.heightParams.y);
+    float shadowIntensity = clamp(pc.heightParams.z, 0.0, 1.0);
+
+    vec3 sunDir = normalize(pc.sunDirection.xyz);
+    float sunIntensity = max(1.0, pc.sunDirection.w);
+    float cosThetaSun = dot(rayDir, sunDir);
+    float phaseM = hgPhase(anisotropy, cosThetaSun);
+
+    // Physically calibrated base extinction:
+    // At densityMultiplier = 1.0, extinction is 0.03 / m (visibility ~100m)
+    float extinctionBase = (mode == 1) ? 0.08 : 0.03;
+    float fogExtinction = extinctionBase * densityMul;
+    vec3 fogScattering = vec3(fogExtinction) * colorTint;
+
+    vec3 throughput = vec3(1.0);
+    vec3 inscattering = vec3(0.0);
+
+    // Exponential depth slice distribution: dist(z) = nearDist * (farDist / nearDist)^(z / (size.z - 1))
+    float logRatio = log(farDist / nearDist);
+    float invSlices = 1.0 / float(max(1, size.z - 1));
+
+    float prevDist = nearDist;
+
+    for (int z = 0; z < size.z; ++z) {
+        float tSlice = float(z) * invSlices;
+        float nextDist = nearDist * exp(tSlice * logRatio);
+        if (z == 0) {
+            nextDist = nearDist;
+        }
+
+        float stepDist = max(0.01, nextDist - prevDist);
+        float sampleDist = prevDist + stepDist * 0.5;
+        prevDist = nextDist;
+
+        vec3 worldP = pc.cameraPos.xyz + rayDir * sampleDist;
+        float sampleH = worldP.y;
+
+        // Exponential height falloff
+        float heightDensity = exp(-max(0.0, sampleH - baseHeight) * heightFalloff);
+        float stepExtinction = fogExtinction * heightDensity;
+        vec3 stepScattering = fogScattering * heightDensity;
+
+        vec3 sampleTransmittance = exp(-vec3(stepExtinction) * stepDist);
+
+        // Volumetric shadow evaluation
+        float shadowAtten = 1.0;
+        if (shadowIntensity > 0.001) {
+            float rawShadow = sampleVolumetricShadow(worldP, camForward);
+            shadowAtten = mix(1.0, rawShadow, shadowIntensity);
+        }
+
+        // Direct sunlight/moonlight + soft ambient with high shadow contrast
+        vec3 lightColor = (sunDir.y >= 0.0) ? vec3(1.15, 1.10, 1.0) : vec3(0.65, 0.82, 1.0);
+        vec3 directSunL = sunIntensity * lightColor * shadowAtten;
+        vec3 ambientL = vec3(0.08, 0.12, 0.18) * (0.35 + 0.65 * heightDensity);
+
+        vec3 S = stepScattering * (directSunL * phaseM + ambientL);
+        vec3 Sint = (S - S * sampleTransmittance) / max(vec3(0.00001), vec3(stepExtinction));
+
+        inscattering += throughput * Sint;
+        throughput *= sampleTransmittance;
+
+        float avgTransmittance = clamp(dot(throughput, vec3(0.333333)), 0.0, 1.0);
+        imageStore(outCameraVolumeLUT, ivec3(coord, z), vec4(inscattering, avgTransmittance));
+    }
+}

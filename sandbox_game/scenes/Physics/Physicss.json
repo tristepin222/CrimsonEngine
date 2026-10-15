@@ -1,0 +1,739 @@
+{
+  "scene": "TestScene",
+  "entities": [
+    {
+      "id": 9998,
+      "name": "Grid",
+      "components": {
+        "Grid": {
+"entityType": "Grid",
+          "gridSpacing": 1,
+          "gridSize": 100
+        },
+"Material": {
+            "color": [0.3, 0.3, 0.3, 1],
+            "texturePath": "",
+            "shaderName": "Unlit",
+            "normalMapPath": "",
+            "metallicMapPath": "",
+            "roughness": 0.5,
+            "metallic": 0
+          },
+"Transform": {
+            "position": [-3.10212, -3.68839e-06, -2.94431],
+            "rotation": [-90, 0, 0],
+            "scale": [1, 1, 1]
+          }
+      }
+    },
+    {
+      "id": 9997,
+      "name": "Camera",
+      "components": {
+        "Camera": {
+"entityType": "Camera",
+          "fov": 45,
+          "isOrthographic": false,
+          "orthoSize": 5,
+          "nearPlane": 0.1,
+          "farPlane": 100,
+          "moveSpeed": 5,
+          "mouseSensitivity": 0.1
+        },
+"CinemachineVirtualCamera": {
+            "followTargetName": "Player",
+            "lookAtTargetName": "Player",
+            "lockToBone": "Head",
+            "mode": "Third Person Follow",
+            "mouseOrbit": 1.0,
+            "mouseLook": 1.0,
+            "orbitSensitivity": 0.1,
+            "orbitYaw": 0,
+            "orbitPitch": 0,
+            "cameraYaw": 0,
+            "cameraPitch": 0,
+            "followOffset": [0, 4, 8],
+            "followDamping": 2,
+            "lookAtDamping": 1,
+            "fov": 45,
+            "priority": 10,
+            "active": 1.0
+          },
+"Input": {
+            "movement": [0, 0, 0],
+            "look": [0, 0]
+          },
+"Transform": {
+            "position": [-3.28617, 4.58501, 7.32406],
+            "rotation": [-26.5651, -90, 0],
+            "scale": [1, 1, 1]
+          }
+      }
+    },
+    {
+      "id": 9996,
+      "name": "Floor",
+      "components": {
+        "Primitive": {
+"entityType": "Primitive",
+          "primitive": "Cube",
+          "color": [1, 1, 1, 1],
+          "shaderName": "Lit",
+          "roughness": 0.5,
+          "metallic": 0
+        },
+        "Collider": {
+"hasCollider": true,
+          "colShape": "OBB",
+          "colRadius": 1,
+          "colHeight": 2,
+          "colExtX": 0.5,
+          "colExtY": 0.5,
+          "colExtZ": 0.5,
+          "colOffsetX": 0,
+          "colOffsetY": 0,
+          "colOffsetZ": 0
+        },
+"Material": {
+            "color": [1, 1, 1, 1],
+            "texturePath": "",
+            "shaderName": "Lit",
+            "normalMapPath": "",
+            "metallicMapPath": "",
+            "roughness": 0.5,
+            "metallic": 0
+          },
+"Transform": {
+            "position": [0, 0.135158, 0],
+            "rotation": [0, 0, 0],
+            "scale": [10, 1, 10]
+          }
+      }
+    },
+    {
+      "id": 9995,
+      "name": "Player",
+      "components": {
+        "Primitive": {
+"entityType": "Primitive",
+          "gltfPath": "assets/Meshes/Physics/Ch36_nonPBR.fbx",
+          "color": [1, 1, 1, 1],
+          "texturePath": "assets/Textures/Ch36_1001_Diffuse.png",
+          "shaderName": "Unlit",
+          "roughness": 0.5,
+          "metallic": 0
+        },
+        "AnimationController": {
+"entityType": "AnimationController",
+          "currentState": "Idle",
+          "hasLocomotionSetup": true,
+          "parameters": {"velocityX": -4.2039, "velocityY": 5.60519, "speed": 0},
+          "states": [{
+            "name": "Idle", "clipName": "mixamo.com", "isBlendTree": false, "isLooping": true, "speed": 1, "blendTree": {
+              "is2D": false, "parameterName": "", "parameterYName": "", "nodes": []
+            }
+          }, {
+            "name": "Movement", "clipName": "", "isBlendTree": true, "isLooping": true, "speed": 1, "blendTree": {
+              "is2D": true, "parameterName": "velocityX", "parameterYName": "velocityY", "nodes": [{"clipName": "mixamo.com", "threshold": 0, "threshold2D_x": 0, "threshold2D_y": 0}, {"clipName": "mixamo.com", "threshold": 0, "threshold2D_x": 0, "threshold2D_y": 1}, {"clipName": "mixamo.com", "threshold": 0, "threshold2D_x": 0, "threshold2D_y": -1}, {"clipName": "mixamo.com", "threshold": 0, "threshold2D_x": -1, "threshold2D_y": 0}, {"clipName": "mixamo.com", "threshold": 0, "threshold2D_x": 1, "threshold2D_y": 0}]
+            }
+          }],
+          "transitions": [{
+            "fromState": "Idle", "toState": "Movement", "crossfadeDuration": 0.25, "conditions": [{"parameterName": "speed", "op": ">", "value": 0.05}]
+          }, {
+            "fromState": "Movement", "toState": "Idle", "crossfadeDuration": 0.25, "conditions": [{"parameterName": "speed", "op": "<", "value": 0.05}]
+          }]
+        },
+        "Collider": {
+"hasCollider": true,
+          "colShape": "Capsule",
+          "colRadius": 0.351,
+          "colHeight": 1.6,
+          "colExtX": 0.5,
+          "colExtY": 0.5,
+          "colExtZ": 0.5,
+          "colOffsetX": 0,
+          "colOffsetY": 0.85,
+          "colOffsetZ": 0
+        },
+        "Animator": {
+"hasAnimator": true,
+          "animActiveIndex": 0,
+          "animPlaybackSpeed": 1,
+          "animLoop": true,
+          "loadedAnimPath": "assets/animations/walking.anim"
+        },
+"Material": {
+            "color": [1, 1, 1, 1],
+            "texturePath": "assets/Textures/Ch36_1001_Diffuse.png",
+            "shaderName": "Unlit",
+            "normalMapPath": "",
+            "metallicMapPath": "",
+            "roughness": 0.5,
+            "metallic": 0
+          },
+"PlayerController": {
+            "speed": 5,
+            "jumpForce": 6,
+            "interactRange": 3,
+            "orientToMovement": 1.0
+          },
+"RigidBody": {
+            "mass": 1,
+            "velocity": [0, 0, 0],
+            "acceleration": [0, 0, 0],
+            "force": [0, 0, 0],
+            "gravityScale": 1,
+            "restitution": 0.5,
+            "friction": 0.3,
+            "angularVelocity": [0, 0, 0],
+            "torque": [0, 0, 0],
+            "angularDrag": 0.5,
+            "linearDrag": 0,
+            "freezePositionX": 0.0,
+            "freezePositionY": 0.0,
+            "freezePositionZ": 0.0,
+            "freezeRotationX": 1.0,
+            "freezeRotationY": 0.0,
+            "freezeRotationZ": 1.0
+          },
+"Skeleton": {
+
+          },
+"Transform": {
+            "position": [-3.28617, 0.585006, -0.675942],
+            "rotation": [0, -159.771, 0],
+            "scale": [1, 1, 1]
+          }
+      }
+    },
+    {
+      "id": 9994,
+      "name": "Cube 2",
+      "components": {
+        "Primitive": {
+"entityType": "Primitive",
+          "primitive": "Cube",
+          "color": [0, 0, 0, 1],
+          "shaderName": "Unlit",
+          "roughness": 0.5,
+          "metallic": 0
+        },
+        "Collider": {
+"hasCollider": true,
+          "colShape": "OBB",
+          "colRadius": 1,
+          "colHeight": 2,
+          "colExtX": 0.5,
+          "colExtY": 0.5,
+          "colExtZ": 0.5,
+          "colOffsetX": 0,
+          "colOffsetY": 0,
+          "colOffsetZ": 0
+        },
+"Material": {
+            "color": [0, 0, 0, 1],
+            "texturePath": "",
+            "shaderName": "Unlit",
+            "normalMapPath": "",
+            "metallicMapPath": "",
+            "roughness": 0.5,
+            "metallic": 0
+          },
+"Transform": {
+            "position": [-0.270498, 2.24277, -2.73666],
+            "rotation": [-170.846, -84.429, -147.309],
+            "scale": [0.999967, 0.949995, 2.69982]
+          }
+      }
+    },
+    {
+      "id": 9993,
+      "name": "Cube 3",
+      "components": {
+        "Primitive": {
+"entityType": "Primitive",
+          "primitive": "Cube",
+          "color": [1, 1, 1, 1],
+          "shaderName": "Lit",
+          "roughness": 0.5,
+          "metallic": 0
+        },
+        "Collider": {
+"hasCollider": true,
+          "colShape": "OBB",
+          "colRadius": 1,
+          "colHeight": 2,
+          "colExtX": 0.5,
+          "colExtY": 0.5,
+          "colExtZ": 0.5,
+          "colOffsetX": 0,
+          "colOffsetY": 0,
+          "colOffsetZ": 0
+        },
+"Material": {
+            "color": [1, 1, 1, 1],
+            "texturePath": "",
+            "shaderName": "Lit",
+            "normalMapPath": "",
+            "metallicMapPath": "",
+            "roughness": 0.5,
+            "metallic": 0
+          },
+"RigidBody": {
+            "mass": 1,
+            "velocity": [0, 0, 0],
+            "acceleration": [0, 0, 0],
+            "force": [0, 0, 0],
+            "gravityScale": 1,
+            "restitution": 0.5,
+            "friction": 0.3,
+            "angularVelocity": [0, 0, 0],
+            "torque": [0, 0, 0],
+            "angularDrag": 0.5,
+            "linearDrag": 0,
+            "freezePositionX": 0.0,
+            "freezePositionY": 0.0,
+            "freezePositionZ": 0.0,
+            "freezeRotationX": 0.0,
+            "freezeRotationY": 0.0,
+            "freezeRotationZ": 0.0
+          },
+"Transform": {
+            "position": [-3.70081, 1.71372, -2.03862],
+            "rotation": [-0.00242605, -4.85058, 0.00190451],
+            "scale": [1, 1, 1]
+          }
+      }
+    },
+    {
+      "id": 9992,
+      "name": "Empty GameObject",
+      "components": {
+        "Hierarchy": {
+"entityType": "Hierarchy",
+          "parentName": "Player"
+        },
+"Transform": {
+            "position": [-1.13249e-06, 1.55424, 2.6226e-06],
+            "rotation": [0, 0, 0],
+            "scale": [1, 1, 1]
+          }
+      }
+    },
+    {
+      "id": 9991,
+      "name": "Empty GameObject 1",
+      "components": {
+        "Tilemap": {
+"entityType": "Tilemap",
+          "width": 10,
+          "height": 10,
+          "tileSize": 1,
+          "tilesetPath": "assets/tilesets/NewTileset.tileset",
+          "layers": [
+            {
+              "name": "Ground",
+              "zOffset": 0,
+              "tag": "ground",
+              "isVisible": true,
+              "isCollision": false,
+              "chunks": [
+              ]
+            }
+          ]
+
+        },
+"Material": {
+            "color": [1, 1, 1, 1],
+            "texturePath": "tileset_atlas:assets/tilesets/NewTileset.tileset",
+            "shaderName": "Unlit",
+            "normalMapPath": "",
+            "metallicMapPath": "",
+            "roughness": 0.5,
+            "metallic": 0
+          },
+"Transform": {
+            "position": [-0.191151, 0.531807, -0.701962],
+            "rotation": [0, 0, 0],
+            "scale": [1, 1, 1]
+          }
+      }
+    },
+    {
+      "id": 9990,
+      "name": "Light",
+      "components": {
+"Light": {
+            "type": "Directional",
+            "direction": [-0, -0.707107, 0.707107],
+            "pitch": 45,
+            "yaw": 0,
+            "color": [1, 1, 1],
+            "intensity": 1,
+            "range": 10,
+            "castShadows": true,
+            "shadowBias": 0.0005,
+            "shadowNormalBias": 1.5,
+            "shadowDistance": 80
+          },
+"Transform": {
+            "position": [-3.00916, 1.91593, -1.39686],
+            "rotation": [0, 0, 0],
+            "scale": [1, 1, 1]
+          }
+      }
+    },
+    {
+      "id": 9989,
+      "name": "Canvas",
+      "components": {
+"Transform": {
+            "position": [0, 0, 0],
+            "rotation": [0, 0, 0],
+            "scale": [1, 1, 1]
+          },
+"Canvas": {
+            "isScreenSpace": 1.0,
+            "isVisible": 1.0
+          }
+      }
+    },
+    {
+      "id": 9988,
+      "name": "Panel",
+      "components": {
+        "Hierarchy": {
+"entityType": "Hierarchy",
+          "parentName": "Canvas"
+        },
+"RectTransform": {
+            "anchorMin": [0.5, 0.5],
+            "anchorMax": [0.5, 0.5],
+            "anchoredPosition": [0, 0],
+            "sizeDelta": [442, 439],
+            "pivot": [0.5, 0.5]
+          },
+"UIPanel": {
+            "color": [0.15, 0.15, 0.15, 0.8],
+            "borderRadius": 4
+          }
+      }
+    },
+    {
+      "id": 9987,
+      "name": "Grid Layout",
+      "components": {
+        "Hierarchy": {
+"entityType": "Hierarchy",
+          "parentName": "Panel"
+        },
+"RectTransform": {
+            "anchorMin": [0.5, 0.5],
+            "anchorMax": [0.5, 0.5],
+            "anchoredPosition": [0, 0],
+            "sizeDelta": [340, 220],
+            "pivot": [0.5, 0.5]
+          },
+"UIPanel": {
+            "color": [0.1, 0.1, 0.12, 0.6],
+            "borderRadius": 6
+          },
+"UIGridLayoutGroup": {
+            "cellSize": [90, 90],
+            "spacing": [10, 10],
+            "padding": [10, 10, 10, 10],
+            "constraintCount": 3
+          }
+      }
+    },
+    {
+      "id": 9986,
+      "name": "Button",
+      "components": {
+        "Hierarchy": {
+"entityType": "Hierarchy",
+          "parentName": "Grid Layout"
+        },
+"RectTransform": {
+            "anchorMin": [0, 0],
+            "anchorMax": [0, 0],
+            "anchoredPosition": [10, 10],
+            "sizeDelta": [90, 90],
+            "pivot": [0, 0]
+          },
+"UIButton": {
+            "label": "Button",
+            "normalColor": [0.15, 0.4, 0.7, 1],
+            "hoverColor": [0.2, 0.5, 0.8, 1],
+            "pressedColor": [0.1, 0.3, 0.6, 1],
+            "textColor": [1, 1, 1, 1],
+            "clickEventName": ""
+          }
+      }
+    },
+    {
+      "id": 9985,
+      "name": "Panel 1",
+      "components": {
+        "Hierarchy": {
+"entityType": "Hierarchy",
+          "parentName": "Grid Layout"
+        },
+"RectTransform": {
+            "anchorMin": [0, 0],
+            "anchorMax": [0, 0],
+            "anchoredPosition": [110, 10],
+            "sizeDelta": [90, 90],
+            "pivot": [0, 0]
+          },
+"UIPanel": {
+            "color": [0.15, 0.15, 0.15, 0.8],
+            "borderRadius": 4
+          }
+      }
+    },
+    {
+      "id": 9984,
+      "name": "Slider",
+      "components": {
+        "Hierarchy": {
+"entityType": "Hierarchy",
+          "parentName": "Panel"
+        },
+"RectTransform": {
+            "anchorMin": [0.5, 0.5],
+            "anchorMax": [0.5, 0.5],
+            "anchoredPosition": [0, 0],
+            "sizeDelta": [160, 20],
+            "pivot": [0.5, 0.5]
+          },
+"UISlider": {
+            "value": 0.5,
+            "minValue": 0,
+            "maxValue": 1,
+            "backgroundColor": [0.2, 0.2, 0.25, 1],
+            "fillColor": [0.2, 0.6, 0.9, 1],
+            "handleColor": [0.95, 0.95, 0.98, 1]
+          }
+      }
+    },
+    {
+      "id": 9983,
+      "name": "Panel 2",
+      "components": {
+        "Hierarchy": {
+"entityType": "Hierarchy",
+          "parentName": "Grid Layout"
+        },
+"RectTransform": {
+            "anchorMin": [0, 0],
+            "anchorMax": [0, 0],
+            "anchoredPosition": [210, 10],
+            "sizeDelta": [90, 90],
+            "pivot": [0, 0]
+          },
+"UIPanel": {
+            "color": [0.15, 0.15, 0.15, 0.8],
+            "borderRadius": 4
+          }
+      }
+    },
+    {
+      "id": 9982,
+      "name": "Camera 1",
+      "components": {
+        "Camera": {
+"entityType": "Camera",
+          "fov": 50.9,
+          "isOrthographic": true,
+          "orthoSize": 5,
+          "nearPlane": 0.1,
+          "farPlane": 100,
+          "moveSpeed": 5,
+          "mouseSensitivity": 0.1
+        },
+"Input": {
+            "movement": [0, 0, 0],
+            "look": [0, 0]
+          },
+"Transform": {
+            "position": [1.05, 2.8, 42.5],
+            "rotation": [0, -90, 0],
+            "scale": [1, 1, 1]
+          }
+      }
+    },
+    {
+      "id": 9981,
+      "name": "Empty GameObject 3",
+      "components": {
+        "AnimationController": {
+"entityType": "AnimationController",
+          "currentState": "TestState",
+          "hasLocomotionSetup": false,
+          "parameters": {},
+          "states": [{
+            "name": "TestState", "clipName": "AnimationTest", "isBlendTree": false, "isLooping": true, "speed": 1, "blendTree": {
+              "is2D": false, "parameterName": "", "parameterYName": "", "nodes": []
+            }
+          }],
+          "transitions": []
+        },
+        "Animator": {
+"hasAnimator": true,
+          "animActiveIndex": 0,
+          "animPlaybackSpeed": 0,
+          "animLoop": true,
+          "loadedAnimPath": "assets/animations/test_Sprite.anim"
+        },
+        "SpriteRenderer": {
+"entityType": "SpriteRenderer",
+          "sprTexturePath": "assets/Textures/Ch36_1001_Diffuse.png",
+          "sprColor": [1,1,1,1],
+          "sprFlipX": false,
+          "sprFlipY": false,
+          "sprSortOrder": 0
+        },
+"Material": {
+            "color": [1, 1, 1, 1],
+            "texturePath": "assets/Textures/Ch36_1001_Diffuse.png",
+            "shaderName": "Sprite",
+            "normalMapPath": "",
+            "metallicMapPath": "",
+            "roughness": 1,
+            "metallic": 1
+          },
+"Skeleton": {
+
+          },
+"Transform": {
+            "position": [0, 1.94254, 0],
+            "rotation": [0, 0, 0],
+            "scale": [1, 1, 1]
+          }
+      }
+    },
+    {
+      "id": 9980,
+      "name": "Cube",
+      "components": {
+        "Primitive": {
+"entityType": "Primitive",
+          "primitive": "Cube",
+          "color": [0, 1, 0, 1],
+          "shaderName": "Unlit",
+          "roughness": 0.5,
+          "metallic": 0
+        },
+"AStarAgent": {
+            "targetTransform": 4.29497e+09,
+            "speed": 2,
+            "allowDiagonal": 1.0,
+            "showDebugPath": 1.0
+          },
+"Material": {
+            "color": [0, 1, 0, 1],
+            "texturePath": "",
+            "shaderName": "Unlit",
+            "normalMapPath": "",
+            "metallicMapPath": "",
+            "roughness": 0.5,
+            "metallic": 0
+          },
+"Transform": {
+            "position": [2.71537, 2.68265, -0.202717],
+            "rotation": [0, 0, 0],
+            "scale": [1, 1, 1]
+          }
+      }
+    },
+    {
+      "id": 9979,
+      "name": "sky",
+      "components": {
+"Atmosphere": {
+            "bottomRadius": 6.371e+06,
+            "topRadius": 6.471e+06,
+            "rayleighScattering": [5.802e-06, 1.3558e-05, 3.31e-05],
+            "rayleighAbsorption": [0, 0, 0],
+            "mieScattering": [3.996e-06, 3.996e-06, 3.996e-06],
+            "mieAbsorption": [4.4e-06, 4.4e-06, 4.4e-06],
+            "absorptionExtinction": [0, 0, 0],
+            "rayleighDensity": {
+              "layers[0]": {
+                "width": 0,
+                "expTerm": 1,
+                "expScale": -0.000125,
+                "linearTerm": 0,
+                "constantTerm": 0
+              },
+              "layers[1]": {
+                "width": 0,
+                "expTerm": 0,
+                "expScale": 0,
+                "linearTerm": 0,
+                "constantTerm": 0
+              }
+            },
+            "mieDensity": {
+              "layers[0]": {
+                "width": 0,
+                "expTerm": 1,
+                "expScale": -0.000833333,
+                "linearTerm": 0,
+                "constantTerm": 0
+              },
+              "layers[1]": {
+                "width": 0,
+                "expTerm": 0,
+                "expScale": 0,
+                "linearTerm": 0,
+                "constantTerm": 0
+              }
+            },
+            "absorptionDensity": {
+              "layers[0]": {
+                "width": 25000,
+                "expTerm": 0,
+                "expScale": 0,
+                "linearTerm": 6.66667e-05,
+                "constantTerm": 0
+              },
+              "layers[1]": {
+                "width": 15000,
+                "expTerm": 0,
+                "expScale": 0,
+                "linearTerm": -6.66667e-05,
+                "constantTerm": 1
+              }
+            },
+            "groundAlbedo": [0.1, 0.1, 0.1],
+            "solarIrradiance": [1, 1, 1],
+            "sunAngularRadius": 0.004675,
+            "mieAnisotropy": 0.8,
+            "enableScattering": 1.0,
+            "enableOzone": 1.0
+          },
+"VolumetricFog": {
+            "enabled": 1.0,
+            "mode": "Atmospheric Haze",
+            "affectSky": 1.0,
+            "isGlobal": 1.0,
+            "maxDistance": 3000,
+            "startDistance": 0,
+            "densityMultiplier": -6.25,
+            "fogColorTint": [1, 1, 1],
+            "anisotropy": 0.8,
+            "baseHeight": 0,
+            "heightFalloff": 0.01,
+            "groundSunAttenuation": 1
+          },
+"Transform": {
+            "position": [0, 0, 0],
+            "rotation": [0, 0, 0],
+            "scale": [1, 1, 1]
+          }
+      }
+    }
+  ]
+}

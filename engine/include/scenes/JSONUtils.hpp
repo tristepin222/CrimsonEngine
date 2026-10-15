@@ -58,6 +58,14 @@ namespace JSONUtils {
      */
     bool extractFloatValue(const std::string& source, const std::string& key, float& value);
     /**
+     * @brief Finds and extracts a boolean value associated with a JSON key.
+     * @param source JSON text source.
+     * @param key Search key.
+     * @param value Destination bool reference.
+     * @return True if successful, false otherwise.
+     */
+    bool extractBoolValue(const std::string& source, const std::string& key, bool& value);
+    /**
      * @brief Extracts individual entity JSON blocks from a main scene array.
      * @param source Full JSON array text.
      * @return Vector of individual entity JSON strings.

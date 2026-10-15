@@ -13,6 +13,8 @@
 struct GLFWwindow;
 class RenderSystem;
 
+#include "renderer/RenderSettings.hpp"
+
 namespace Engine {
     class UISystem;
 
@@ -30,6 +32,15 @@ namespace Engine {
         std::string projectPath = ".";
         /** @brief Directory where the editor/runtime executable lives. Used to locate engine plugins. */
         std::string exeDir;
+
+        ShadowSettings shadowSettings{};
+        bool hasCustomShadowSettings = false;
+
+        TonemapSettings tonemapSettings{};
+        bool hasCustomTonemapSettings = false;
+
+        SSAOSettings ssaoSettings{};
+        bool hasCustomSSAOSettings = false;
     };
 
     /**

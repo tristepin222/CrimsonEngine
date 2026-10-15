@@ -65,3 +65,6 @@ private:
     /** @brief Reference to Vulkan renderer. */
     VulkanRenderer& renderer;
 };
+
+/** @brief Synchronizes all component reflections into ComponentSerializerRegistry. */
+ENGINE_API void syncReflectionSerializers();

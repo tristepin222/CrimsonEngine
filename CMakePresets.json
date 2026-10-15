@@ -8,11 +8,9 @@
       "generator": "Visual Studio 17 2022",
       "architecture": "x64",
       "toolset": "v143",
-      "binaryDir": "${sourceDir}/build/msvc",
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Release"
-      }
+      "binaryDir": "${sourceDir}/build/msvc"
     },
+
     {
       "name": "windows-ci",
       "displayName": "Windows CI (MSVC + Ninja)",
@@ -24,12 +22,20 @@
       }
     }
   ],
+
   "buildPresets": [
     {
-      "name": "windows-msvc-x64",
+      "name": "windows-msvc-x64-debug",
+      "configurePreset": "windows-msvc-x64",
+      "configuration": "Debug"
+    },
+
+    {
+      "name": "windows-msvc-x64-release",
       "configurePreset": "windows-msvc-x64",
       "configuration": "Release"
     },
+
     {
       "name": "windows-ci",
       "configurePreset": "windows-ci",
