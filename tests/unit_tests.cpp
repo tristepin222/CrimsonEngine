@@ -21,6 +21,7 @@
 #include <sys/wait.h>
 #include <signal.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <cstring>
 #include <cerrno>
 #endif
@@ -58,12 +59,25 @@ inline bool runSubprocessTest(const char* exePath, const char* testName, unsigne
     if (waitResult == WAIT_TIMEOUT) {
         std::cerr << "[DEADLOCK DETECTED] Subprocess test '" << testName << "' timed out after "
                   << timeoutMs << " ms! Initiating process termination..." << std::endl;
+
+        bool processConfirmedExited = false;
+
         if (!TerminateProcess(pi.hProcess, 1)) {
-            std::cerr << "TerminateProcess failed on child process: " << GetLastError() << std::endl;
+            DWORD termErr = GetLastError();
+            std::cerr << "TerminateProcess failed on child process: " << termErr << std::endl;
+            // Check if process has already exited despite TerminateProcess failing
+            DWORD exitCode = 0;
+            if (GetExitCodeProcess(pi.hProcess, &exitCode)) {
+                if (exitCode != STILL_ACTIVE) {
+                    processConfirmedExited = true;
+                    std::cerr << "Notice: Child process PID " << pi.dwProcessId 
+                              << " was already terminated (ExitCode: " << exitCode << ")." << std::endl;
+                }
+            }
         } else {
             DWORD termWait = WaitForSingleObject(pi.hProcess, 5000);
             if (termWait == WAIT_OBJECT_0) {
-                // Child terminated cleanly
+                processConfirmedExited = true;
             } else if (termWait == WAIT_FAILED) {
                 std::cerr << "WaitForSingleObject failed while waiting for terminated process: " << GetLastError() << std::endl;
             } else if (termWait == WAIT_TIMEOUT) {
@@ -72,7 +86,9 @@ inline bool runSubprocessTest(const char* exePath, const char* testName, unsigne
                     std::cerr << "Retry TerminateProcess failed: " << GetLastError() << std::endl;
                 } else {
                     termWait = WaitForSingleObject(pi.hProcess, 5000);
-                    if (termWait == WAIT_FAILED) {
+                    if (termWait == WAIT_OBJECT_0) {
+                        processConfirmedExited = true;
+                    } else if (termWait == WAIT_FAILED) {
                         std::cerr << "WaitForSingleObject failed on retry wait: " << GetLastError() << std::endl;
                     } else if (termWait == WAIT_TIMEOUT) {
                         DWORD exitCode = 0;
@@ -84,6 +100,7 @@ inline bool runSubprocessTest(const char* exePath, const char* testName, unsigne
                             std::cerr << "Cleanup warning: Child process PID " << pi.dwProcessId
                                       << " timed out during termination wait (process status: STILL_ACTIVE)." << std::endl;
                         } else {
+                            processConfirmedExited = true;
                             std::cerr << "Cleanup notice: Child process PID " << pi.dwProcessId
                                       << " exited with code " << exitCode << " during termination cleanup." << std::endl;
                         }
@@ -91,6 +108,12 @@ inline bool runSubprocessTest(const char* exePath, const char* testName, unsigne
                 }
             }
         }
+
+        if (!processConfirmedExited) {
+            std::cerr << "CRITICAL CLEANUP FAILURE: Process PID " << pi.dwProcessId 
+                      << " could not be confirmed as terminated. Cleanup unconfirmed!" << std::endl;
+        }
+
         CloseHandle(pi.hProcess);
         CloseHandle(pi.hThread);
         return false;
@@ -134,8 +157,17 @@ inline bool runSubprocessTest(const char* exePath, const char* testName, unsigne
         std::cerr << "pipe() failed for " << testName << ": " << std::strerror(errno) << std::endl;
         return false;
     }
-    (void)fcntl(pipefd[0], F_SETFD, FD_CLOEXEC);
-    (void)fcntl(pipefd[1], F_SETFD, FD_CLOEXEC);
+
+    // Set close-on-exec on both ends and verify return values
+    if (fcntl(pipefd[0], F_SETFD, FD_CLOEXEC) == -1 || fcntl(pipefd[1], F_SETFD, FD_CLOEXEC) == -1) {
+        std::cerr << "fcntl(FD_CLOEXEC) failed on pipe: " << std::strerror(errno) << std::endl;
+        close(pipefd[0]);
+        close(pipefd[1]);
+        return false;
+    }
+
+    // Start timeout clock before fork/handshake to ensure handshake cannot bypass timeout
+    auto startTime = std::chrono::steady_clock::now();
 
     pid_t pid = fork();
     if (pid < 0) {
@@ -174,12 +206,69 @@ inline bool runSubprocessTest(const char* exePath, const char* testName, unsigne
     // Parent process: close write end
     close(pipefd[1]);
 
-    // Check if child reported an execvp error through the pipe
+    // Read error payload from pipe with poll() against overall timeout deadline
     int childErr = 0;
-    ssize_t bytesRead = read(pipefd[0], &childErr, sizeof(childErr));
+    size_t totalRead = 0;
+    bool execSuccess = false;
+
+    while (true) {
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - startTime).count();
+        if (elapsed >= timeoutMs) {
+            std::cerr << "[DEADLOCK DETECTED] Subprocess test '" << testName << "' timed out during launch handshake after "
+                      << timeoutMs << " ms! Sending SIGKILL to child process." << std::endl;
+            kill(pid, SIGKILL);
+            int status = 0;
+            while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
+            close(pipefd[0]);
+            return false;
+        }
+
+        int remainingTimeout = static_cast<int>(timeoutMs - elapsed);
+        struct pollfd pfd;
+        pfd.fd = pipefd[0];
+        pfd.events = POLLIN | POLLHUP;
+        pfd.revents = 0;
+
+        int pollRes = poll(&pfd, 1, std::min(remainingTimeout, 100));
+        if (pollRes < 0) {
+            if (errno == EINTR) continue;
+            std::cerr << "poll() failed on pipe: " << std::strerror(errno) << std::endl;
+            kill(pid, SIGKILL);
+            int status = 0;
+            while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
+            close(pipefd[0]);
+            return false;
+        }
+
+        if (pollRes == 0) {
+            continue; // Time slice expired; loop around and evaluate overall deadline
+        }
+
+        if (pfd.revents & (POLLIN | POLLHUP | POLLERR)) {
+            ssize_t n = read(pipefd[0], reinterpret_cast<char*>(&childErr) + totalRead, sizeof(childErr) - totalRead);
+            if (n > 0) {
+                totalRead += static_cast<size_t>(n);
+                if (totalRead == sizeof(childErr)) {
+                    break; // Complete error payload received
+                }
+            } else if (n == 0) {
+                // EOF: write end closed on successful execvp
+                execSuccess = true;
+                break;
+            } else {
+                if (errno == EINTR) continue;
+                std::cerr << "read() failed on pipe: " << std::strerror(errno) << std::endl;
+                kill(pid, SIGKILL);
+                int status = 0;
+                while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
+                close(pipefd[0]);
+                return false;
+            }
+        }
+    }
     close(pipefd[0]);
 
-    if (bytesRead == sizeof(childErr)) {
+    if (!execSuccess && totalRead == sizeof(childErr)) {
         std::cerr << "Child process execvp failed for executable '" << resolvedPath 
                   << "' (Error: " << std::strerror(childErr) << ")" << std::endl;
         int status = 0;
@@ -188,7 +277,6 @@ inline bool runSubprocessTest(const char* exePath, const char* testName, unsigne
     }
 
     // Parent process: poll waitpid with timeout and handle EINTR
-    auto startTime = std::chrono::steady_clock::now();
     int status = 0;
     while (true) {
         pid_t res = waitpid(pid, &status, WNOHANG);
