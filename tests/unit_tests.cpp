@@ -14,6 +14,13 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#else
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <signal.h>
+#include <cstring>
+#include <cerrno>
 #endif
 
 #include "ecs/Registry.hpp"
@@ -23,7 +30,7 @@
 #include "ecs/SystemManager.hpp"
 #include "core/JobSystem.hpp"
 
-// Subprocess test launcher with hard termination timeout to safely guard against deadlocks
+// Subprocess test launcher with hard termination timeout to safely guard against deadlocks across platforms
 inline bool runSubprocessTest(const char* exePath, const char* testName, unsigned int timeoutMs) {
 #if defined(_WIN32)
     std::string cmd = std::string("\"") + exePath + "\" --child-test " + testName;
@@ -39,26 +46,83 @@ inline bool runSubprocessTest(const char* exePath, const char* testName, unsigne
     }
 
     DWORD waitResult = WaitForSingleObject(pi.hProcess, timeoutMs);
+    if (waitResult == WAIT_FAILED) {
+        std::cerr << "WaitForSingleObject failed on child process: " << GetLastError() << std::endl;
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+        return false;
+    }
+
     if (waitResult == WAIT_TIMEOUT) {
         std::cerr << "[DEADLOCK DETECTED] Subprocess test '" << testName << "' timed out after "
                   << timeoutMs << " ms! Terminating child process." << std::endl;
-        TerminateProcess(pi.hProcess, 1);
+        if (!TerminateProcess(pi.hProcess, 1)) {
+            std::cerr << "TerminateProcess failed: " << GetLastError() << std::endl;
+        } else {
+            // Wait for the process to exit before closing handles
+            WaitForSingleObject(pi.hProcess, 5000);
+        }
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+        return false;
+    }
+
+    if (waitResult != WAIT_OBJECT_0) {
+        std::cerr << "Unexpected wait result: " << waitResult << " (Error: " << GetLastError() << ")" << std::endl;
         CloseHandle(pi.hProcess);
         CloseHandle(pi.hThread);
         return false;
     }
 
     DWORD exitCode = 1;
-    GetExitCodeProcess(pi.hProcess, &exitCode);
+    if (!GetExitCodeProcess(pi.hProcess, &exitCode)) {
+        std::cerr << "GetExitCodeProcess failed: " << GetLastError() << std::endl;
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+        return false;
+    }
+
     CloseHandle(pi.hProcess);
     CloseHandle(pi.hThread);
 
     return exitCode == 0;
 #else
-    (void)exePath;
-    (void)testName;
-    (void)timeoutMs;
-    return false;
+    pid_t pid = fork();
+    if (pid < 0) {
+        std::cerr << "fork() failed for " << testName << ": " << std::strerror(errno) << std::endl;
+        return false;
+    }
+
+    if (pid == 0) {
+        // Child process: execute the child test mode
+        execl(exePath, exePath, "--child-test", testName, static_cast<char*>(nullptr));
+        _exit(127);
+    }
+
+    // Parent process: poll waitpid with timeout
+    auto startTime = std::chrono::steady_clock::now();
+    int status = 0;
+    while (true) {
+        pid_t res = waitpid(pid, &status, WNOHANG);
+        if (res == pid) {
+            // Child process exited normally or terminated
+            return WIFEXITED(status) && (WEXITSTATUS(status) == 0);
+        } else if (res < 0) {
+            std::cerr << "waitpid failed on " << testName << ": " << std::strerror(errno) << std::endl;
+            return false;
+        }
+
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - startTime).count();
+        if (elapsed >= timeoutMs) {
+            std::cerr << "[DEADLOCK DETECTED] Subprocess test '" << testName << "' timed out after "
+                      << timeoutMs << " ms! Sending SIGKILL to child process." << std::endl;
+            kill(pid, SIGKILL);
+            waitpid(pid, &status, 0); // Reclaim zombie child process
+            return false;
+        }
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
 #endif
 }
 
